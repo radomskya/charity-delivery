@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Delivery Availability</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 24px 18px;
+      background: #f7f7f7;
+      color: #222;
+    }
+    .card {
+      background: white;
+      border-radius: 10px;
+      padding: 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    }
+    h1 { font-size: 20px; margin-top: 0; }
+    p { line-height: 1.5; }
+    input[type=tel] {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      box-sizing: border-box;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      margin-bottom: 12px;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      font-size: 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      color: white;
+      margin-bottom: 10px;
+    }
+    .btn-primary { background: #2196F3; }
+    .btn-yes { background: #4CAF50; }
+    .btn-no { background: #f44336; }
+    .hidden { display: none; }
+    .msg { padding: 12px; border-radius: 6px; margin-bottom: 12px; font-size: 14px; }
+    .msg-error { background: #ffebee; color: #c62828; }
+    .msg-success { background: #e8f5e9; color: #2e7d32; }
+    .name { font-size: 22px; font-weight: bold; margin: 10px 0; }
+    .muted { color: #777; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🚗 Delivery Availability</h1>
+    <div id="loading"><p>Loading…</p></div>
+
+    <div id="error-area" class="hidden">
+      <div class="msg msg-error" id="error-text"></div>
+    </div>
+
+    <!-- Step 1: enter phone -->
+    <div id="phone-step" class="hidden">
+      <p>Please enter your mobile number to confirm who you are.</p>
+      <input type="tel" id="phone-input" placeholder="e.g. 07700 123456" autocomplete="tel">
+      <button class="btn-primary" id="check-btn">Continue</button>
+      <p class="muted">Your number is only used to confirm your identity. It is not stored or shared.</p>
+    </div>
+
+    <!-- Step 2: confirm + vote -->
+    <div id="vote-step" class="hidden">
+      <p>You are voting as:</p>
+      <div class="name" id="driver-name"></div>
+      <p>Are you available for delivery on <strong id="poll-date"></strong>?</p>
+      <button class="btn-yes" id="yes-btn">✅ Yes, I'm available</button>
+      <button class="btn-no" id="no-btn">❌ No, not this time</button>
+      <button class="btn-primary" id="back-btn" style="background:#999;">Not you? Go back</button>
+    </div>
+
+    <!-- Step 3: done -->
+    <div id="done-step" class="hidden">
+      <div class="msg msg-success" id="done-text"></div>
+      <button class="btn-primary" id="change-btn">Change my answer</button>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <script>
+    var firebaseConfig = {
+      apiKey: "AIzaSyAwCoQ35k6_7068yFZ7SXI3riRsQaq9Pgg",
+      authDomain: "charity-delivery.firebaseapp.com",
+      databaseURL: "https://charity-delivery-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "charity-delivery",
+      storageBucket: "charity-delivery.firebasestorage.app",
+      messagingSenderId: "460717648995",
+      appId: "1:460717648995:web:26a3747ecde3ae1e0a5c56"
+    };
+    firebase.initializeApp(firebaseConfig);
+    var db = firebase.database();
+
+    // --- helpers (must match the admin app exactly) ---
+    function normalisePhone(phone) {
+      var digits = (phone || '').replace(/\D/g, '');
+      if (digits.indexOf('44') === 0) digits = digits.slice(2);
+      if (digits.indexOf('0') === 0) digits = digits.slice(1);
+      return digits;
+    }
+    function hashPhone(phone) {
+      var normalised = normalisePhone(phone);
+      var hash = 5381;
+      for (var i = 0; i < normalised.length; i++) {
+        hash = ((hash << 5) + hash + normalised.charCodeAt(i)) >>> 0;
+      }
+      return 'p' + hash.toString(16);
+    }
+    function formatUKDate(d) {
+      if (!d) return '';
+      var parts = d.split('-');
+      if (parts.length !== 3) return d;
+      return parts[2] + '-' + parts[1] + '-' + parts[0];
+    }
+
+    // --- get poll id from URL ---
+    function getParam(name) {
+      var m = new RegExp('[?&]' + name + '=([^&]+)').exec(window.location.search);
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+    var pollId = getParam('poll');
+
+    var el = function(id){ return document.getElementById(id); };
+    var roster = {};
+    var pollDate = '';
+    var matchedHash = null;
+    var matchedName = null;
+
+    function showError(text) {
+      el('loading').classList.add('hidden');
+      el('error-area').classList.remove('hidden');
+      el('error-text').textContent = text;
+    }
+
+    if (!pollId) {
+      showError('No poll specified. Please use the link your coordinator sent you.');
+    } else {
+      db.ref('polls/' + pollId).get().then(function(snap) {
+        if (!snap.exists()) {
+          showError('This poll could not be found. It may have been closed.');
+          return;
+        }
+        var data = snap.val();
+        roster = data.roster || {};
+        pollDate = data.date || '';
+        el('poll-date').textContent = formatUKDate(pollDate);
+        el('loading').classList.add('hidden');
+        el('phone-step').classList.remove('hidden');
+      }).catch(function(err) {
+        showError('Could not load the poll: ' + err.message);
+      });
+    }
+
+    el('check-btn').addEventListener('click', function() {
+      var phone = el('phone-input').value;
+      if (!normalisePhone(phone)) {
+        alert('Please enter a valid mobile number.');
+        return;
+      }
+      var h = hashPhone(phone);
+      if (roster[h]) {
+        matchedHash = h;
+        matchedName = roster[h];
+        el('driver-name').textContent = matchedName;
+        el('phone-step').classList.add('hidden');
+        el('error-area').classList.add('hidden');
+        el('vote-step').classList.remove('hidden');
+      } else {
+        el('error-area').classList.remove('hidden');
+        el('error-text').textContent = 'That number was not recognised. Please check it and try again, or contact your coordinator.';
+      }
+    });
+
+    function submitVote(answer) {
+      db.ref('polls/' + pollId + '/votes/' + matchedHash).set({
+        name: matchedName,
+        available: answer,
+        at: new Date().toISOString()
+      }).then(function() {
+        el('vote-step').classList.add('hidden');
+        el('done-step').classList.remove('hidden');
+        el('done-text').textContent = answer
+          ? 'Thank you, ' + matchedName + '! You are marked as AVAILABLE for ' + formatUKDate(pollDate) + '.'
+          : 'Thanks, ' + matchedName + '. You are marked as NOT available for ' + formatUKDate(pollDate) + '.';
+      }).catch(function(err) {
+        alert('Could not save your answer: ' + err.message);
+      });
+    }
+
+    el('yes-btn').addEventListener('click', function(){ submitVote(true); });
+    el('no-btn').addEventListener('click', function(){ submitVote(false); });
+    el('back-btn').addEventListener('click', function() {
+      el('vote-step').classList.add('hidden');
+      el('phone-input').value = '';
+      el('phone-step').classList.remove('hidden');
+    });
+    el('change-btn').addEventListener('click', function() {
+      el('done-step').classList.add('hidden');
+      el('vote-step').classList.remove('hidden');
+    });
+  </script>
+</body>
+</html>
