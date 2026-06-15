@@ -26,7 +26,7 @@ try {
 } catch (error) {
   console.error("Firebase initialization FAILED:", error);
 }
-}
+
 
 // ============================================================================
 // MAIN COMPONENT
