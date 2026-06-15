@@ -177,7 +177,7 @@ export default function CharityDeliverySystem() {
   useEffect(() => {
     const timer = setTimeout(saveData, 1000);
     return () => clearTimeout(timer);
-  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, pollResponses, allocations, autoAllocated, user]);
+  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, user]);
 
   // ============================================================================
   // ANCHOR DATE & WEEK DETECTION SYSTEM
