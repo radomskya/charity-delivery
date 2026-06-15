@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
-import { getDatabase, ref, set, onValue } from 'firebase/database';
+// Firebase loaded from CDN (see public/index.html)
 
 // ============================================================================
 // FIREBASE CONFIGURATION
@@ -48,6 +46,8 @@ export default function CharityDeliverySystem() {
   const [activeTab, setActiveTab] = useState('setup');
   const [showAddAddress, setShowAddAddress] = useState(false);
   const [showAddDriver, setShowAddDriver] = useState(false);
+  const [editingDriverName, setEditingDriverName] = useState('');
+  const [editingDriverPhone, setEditingDriverPhone] = useState('');
   const [editingAddress, setEditingAddress] = useState(null);
   const [editingAddressForPreferences, setEditingAddressForPreferences] = useState(null);
 
@@ -391,6 +391,38 @@ ${Object.keys(calculated).map(key => `${calculated[key].fullAddress}: Chicken ${
   };
 
   // ============================================================================
+  // DRIVER MANAGEMENT
+  // ============================================================================
+
+  const addOrUpdateDriver = () => {
+    if (!editingDriverName.trim()) {
+      alert('Please enter a driver name');
+      return;
+    }
+
+    const name = editingDriverName.trim();
+
+    setDrivers({ ...drivers, [name]: true });
+    setDriverPhones({ ...driverPhones, [name]: editingDriverPhone.trim() });
+
+    setEditingDriverName('');
+    setEditingDriverPhone('');
+    setShowAddDriver(false);
+  };
+
+  const deleteDriver = (name) => {
+    if (window.confirm(`Delete driver ${name}?`)) {
+      const newDrivers = { ...drivers };
+      delete newDrivers[name];
+      setDrivers(newDrivers);
+
+      const newPhones = { ...driverPhones };
+      delete newPhones[name];
+      setDriverPhones(newPhones);
+    }
+  };
+
+  // ============================================================================
   // UI COMPONENTS
   // ============================================================================
 
@@ -649,6 +681,53 @@ ${Object.keys(calculated).map(key => `${calculated[key].fullAddress}: Chicken ${
                     Delete
                   </button>
                 </div>
+              </div>
+            ))}
+          </div>
+
+          <h3 style={{ marginTop: '30px' }}>Drivers</h3>
+          <button onClick={() => setShowAddDriver(true)} style={{ padding: '8px 16px', marginBottom: '10px' }}>
+            ➕ Add Driver
+          </button>
+
+          {showAddDriver && (
+            <div style={{ border: '1px solid #ddd', padding: '15px', marginBottom: '15px' }}>
+              <h4>Add Driver</h4>
+              <input
+                type="text"
+                placeholder="Driver Name"
+                value={editingDriverName}
+                onChange={(e) => setEditingDriverName(e.target.value)}
+                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
+              />
+              <input
+                type="text"
+                placeholder="Phone (e.g. 07700 123456)"
+                value={editingDriverPhone}
+                onChange={(e) => setEditingDriverPhone(e.target.value)}
+                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
+              />
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button onClick={addOrUpdateDriver} style={{ padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}>
+                  Save Driver
+                </button>
+                <button onClick={() => { setShowAddDriver(false); setEditingDriverName(''); setEditingDriverPhone(''); }} style={{ padding: '8px 16px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: '15px' }}>
+            {Object.keys(drivers).map((name) => (
+              <div key={name} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <strong>{name}</strong>
+                  {driverPhones[name] && <span style={{ marginLeft: '10px', color: '#666', fontSize: '13px' }}>📞 {driverPhones[name]}</span>}
+                </div>
+                <button onClick={() => deleteDriver(name)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>
+                  Delete
+                </button>
               </div>
             ))}
           </div>
