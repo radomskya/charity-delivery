@@ -169,6 +169,13 @@ export default function CharityDeliverySystem() {
   // ANCHOR DATE & WEEK DETECTION SYSTEM
   // ============================================================================
 
+  const formatUKDate = (dateString) => {
+    if (!dateString) return '';
+    const parts = dateString.split('-'); // yyyy-mm-dd
+    if (parts.length !== 3) return dateString;
+    return `${parts[2]}-${parts[1]}-${parts[0]}`; // dd-mm-yyyy
+  };
+
   const detectWeekType = (date) => {
     if (!anchorDate) return 'A';
     
@@ -277,7 +284,7 @@ export default function CharityDeliverySystem() {
 
     // Generate butcher email from the customisable template
     const emailContent = butcherEmailTemplate
-      .replace(/{DATE}/g, selectedDate)
+      .replace(/{DATE}/g, formatUKDate(selectedDate))
       .replace(/{CHICKEN}/g, totalChicken)
       .replace(/{MEAT}/g, totalMeat)
       .replace(/{PIES}/g, totalPies);
@@ -301,7 +308,7 @@ export default function CharityDeliverySystem() {
 
     const headerText = deliveryMessage
       .replace(/{DRIVER}/g, driverName)
-      .replace(/{DATE}/g, dateStr)
+      .replace(/{DATE}/g, formatUKDate(dateStr))
       .replace(/{STOPS}/g, addresses_array.length);
 
     const headerHTML = headerText
@@ -807,7 +814,7 @@ export default function CharityDeliverySystem() {
           {selectedDate ? (
             <>
               <div style={{ backgroundColor: '#f5f5f5', padding: '15px', marginBottom: '15px', borderRadius: '4px' }}>
-                <strong>Delivery Date:</strong> {selectedDate}<br />
+                <strong>Delivery Date:</strong> {formatUKDate(selectedDate)}<br />
                 <strong>Week:</strong> {detectedWeekType}{detectedFirstOfMonth ? ' + First of Month' : ''}<br />
                 <strong>Type:</strong> {deliveryType.charAt(0).toUpperCase() + deliveryType.slice(1)}
               </div>
