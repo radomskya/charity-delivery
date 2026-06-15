@@ -92,6 +92,12 @@ export default function CharityDeliverySystem() {
   // UI feedback
   const [copiedMessage, setCopiedMessage] = useState('');
 
+  // Cutoff & timezone
+  const [cutoffDay, setCutoffDay] = useState('thursday');
+  const [cutoffHour, setCutoffHour] = useState('08');
+  const [cutoffMinute, setCutoffMinute] = useState('00');
+  const [forceUKTime, setForceUKTime] = useState(true);
+
   // ============================================================================
   // FIREBASE AUTH
   // ============================================================================
@@ -133,6 +139,10 @@ export default function CharityDeliverySystem() {
         setPollMessage(data.pollMessage || pollMessage);
         setDeliveryMessage(data.deliveryMessage || deliveryMessage);
         setButcherEmailTemplate(data.butcherEmailTemplate || butcherEmailTemplate);
+        setCutoffDay(data.cutoffDay || 'thursday');
+        setCutoffHour(data.cutoffHour || '08');
+        setCutoffMinute(data.cutoffMinute || '00');
+        setForceUKTime(data.forceUKTime !== false);
         setAllocations(data.allocations || {});
         setAutoAllocated(data.autoAllocated || false);
       }
@@ -154,6 +164,10 @@ export default function CharityDeliverySystem() {
       pollMessage,
       deliveryMessage,
       butcherEmailTemplate,
+      cutoffDay,
+      cutoffHour,
+      cutoffMinute,
+      forceUKTime,
       pollResponses,
       allocations,
       autoAllocated
@@ -969,9 +983,52 @@ export default function CharityDeliverySystem() {
             style={{ width: '100%', minHeight: '120px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
             placeholder="Hi, please prepare ..."
           />
-          <p style={{ fontSize: '12px', color: '#666', marginTop: '-5px', marginBottom: '15px' }}>
+        <p style={{ fontSize: '12px', color: '#666', marginTop: '-5px', marginBottom: '15px' }}>
             Use {'{DATE}'}, {'{CHICKEN}'}, {'{MEAT}'}, and {'{PIES}'} as placeholders.
           </p>
+
+          <h3 style={{ marginTop: '20px' }}>Poll Cutoff</h3>
+          <div style={{ backgroundColor: '#f5f5f5', padding: '15px', borderRadius: '4px', marginBottom: '20px' }}>
+            <p style={{ marginTop: 0, fontSize: '13px', color: '#666' }}>When the availability poll closes each week.</p>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label>Day:
+                <select value={cutoffDay} onChange={(e) => setCutoffDay(e.target.value)} style={{ padding: '8px', marginLeft: '5px' }}>
+                  <option value="monday">Monday</option>
+                  <option value="tuesday">Tuesday</option>
+                  <option value="wednesday">Wednesday</option>
+                  <option value="thursday">Thursday</option>
+                  <option value="friday">Friday</option>
+                  <option value="saturday">Saturday</option>
+                  <option value="sunday">Sunday</option>
+                </select>
+              </label>
+              <label>Time:
+                <select value={cutoffHour} onChange={(e) => setCutoffHour(e.target.value)} style={{ padding: '8px', marginLeft: '5px' }}>
+                  {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
+                    <option key={h} value={h}>{h}</option>
+                  ))}
+                </select>
+                <span style={{ margin: '0 5px' }}>:</span>
+                <select value={cutoffMinute} onChange={(e) => setCutoffMinute(e.target.value)} style={{ padding: '8px' }}>
+                  {['00', '15', '30', '45'].map(m => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <h3>Timezone</h3>
+          <div style={{ backgroundColor: '#f5f5f5', padding: '15px', borderRadius: '4px', marginBottom: '20px' }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={forceUKTime}
+                onChange={(e) => setForceUKTime(e.target.checked)}
+              />
+              {' '}Force UK time (keeps cutoff in UK time even when you're abroad)
+            </label>
+          </div>
         </div>
       )}
 
