@@ -275,21 +275,12 @@ export default function CharityDeliverySystem() {
 
     setCalculatedAddresses(calculated);
 
-    // Generate butcher email
-    const emailContent = `
-DELIVERY FOR ${selectedDate}
-
-Week: ${detectedWeekType}${detectedFirstOfMonth ? ' + First of Month' : ''}
-Type: ${deliveryType.charAt(0).toUpperCase() + deliveryType.slice(1)}
-
-TOTALS:
-Chicken: ${totalChicken}
-Meat: ${totalMeat}
-Pies: ${totalPies}
-
-DETAILS:
-${Object.keys(calculated).map(key => `${calculated[key].fullAddress}: Chicken ${calculated[key].chicken}, Meat ${calculated[key].meat}, Pies ${calculated[key].pies}`).join('\n')}
-    `;
+    // Generate butcher email from the customisable template
+    const emailContent = butcherEmailTemplate
+      .replace(/{DATE}/g, selectedDate)
+      .replace(/{CHICKEN}/g, totalChicken)
+      .replace(/{MEAT}/g, totalMeat)
+      .replace(/{PIES}/g, totalPies);
 
     setEmailTemplate(emailContent);
   };
@@ -308,11 +299,19 @@ ${Object.keys(calculated).map(key => `${calculated[key].fullAddress}: Chicken ${
     const weekLabel = detectedWeekType + (detectedFirstOfMonth ? ' + First of Month' : '');
     const addresses_array = Object.entries(calculatedAddresses);
 
+    const headerText = deliveryMessage
+      .replace(/{DRIVER}/g, driverName)
+      .replace(/{DATE}/g, dateStr)
+      .replace(/{STOPS}/g, addresses_array.length);
+
+    const headerHTML = headerText
+      .split('\n')
+      .map(line => `<p style="margin: 5px 0; color: #333; font-weight: bold;">${line}</p>`)
+      .join('');
+
     const html = `
 <div style="font-family: Arial, sans-serif; padding: 20px; background: white; max-width: 600px;">
-  <h2 style="color: #333; margin-bottom: 5px;">📦 DELIVERY LIST FOR ${driverName}</h2>
-  <p style="margin: 5px 0; color: #666;">📅 Week of: ${dateStr}</p>
-  <p style="margin: 5px 0; color: #666;">🚗 Total stops: ${addresses_array.length}</p>
+  ${headerHTML}
   
   <hr style="border: none; border-top: 2px solid #ddd; margin: 15px 0;">
   
