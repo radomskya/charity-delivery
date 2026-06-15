@@ -422,7 +422,7 @@ ${Object.keys(calculated).map(key => `${calculated[key].fullAddress}: Chicken ${
         
         <button
           onClick={() => {
-            auth.signInWithEmailAndPassword(loginEmail, loginPassword)
+            signInWithEmailAndPassword(auth, loginEmail, loginPassword)
               .catch((error) => setAuthError(error.message));
           }}
           style={{ width: '100%', padding: '10px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}
