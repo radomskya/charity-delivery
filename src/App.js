@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-// Firebase loaded from CDN (see public/index.html)
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
+import { getDatabase, ref, set, onValue } from 'firebase/database';
 
 // ============================================================================
 // FIREBASE CONFIGURATION
