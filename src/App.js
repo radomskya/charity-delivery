@@ -86,6 +86,8 @@ export default function CharityDeliverySystem() {
   // Message customization
   const [pollMessage, setPollMessage] = useState('Hi! Quick question - are you available for delivery on {CUTOFF}? Vote here: {LINK}');
   const [emailTemplate, setEmailTemplate] = useState('');
+  const [deliveryMessage, setDeliveryMessage] = useState('📦 DELIVERY LIST FOR {DRIVER}\n📅 Week of: {DATE}\n🚗 Total stops: {STOPS}');
+  const [butcherEmailTemplate, setButcherEmailTemplate] = useState('Hi,\n\nPlease prepare the following for collection on {DATE}:\n\n🍗 Chicken: {CHICKEN}\n🍖 Meat: {MEAT}\n🥧 Pies: {PIES}\n\nThank you!');
 
   // UI feedback
   const [copiedMessage, setCopiedMessage] = useState('');
@@ -127,8 +129,10 @@ export default function CharityDeliverySystem() {
         setAnchorDate(data.anchorDate || '2024-06-06');
         setAnchorWeek(data.anchorWeek || 'A');
         setAnchorFirstOfMonth(data.anchorFirstOfMonth !== false);
+        set(data. || pollMessage);
         setPollMessage(data.pollMessage || pollMessage);
-        setPollResponses(data.pollResponses || {});
+        setDeliveryMessage(data.deliveryMessage || deliveryMessage);
+        setButcherEmailTemplate(data.butcherEmailTemplate || butcherEmailTemplate);
         setAllocations(data.allocations || {});
         setAutoAllocated(data.autoAllocated || false);
       }
@@ -148,6 +152,8 @@ export default function CharityDeliverySystem() {
       anchorWeek,
       anchorFirstOfMonth,
       pollMessage,
+      deliveryMessage,
+      butcherEmailTemplate,
       pollResponses,
       allocations,
       autoAllocated
@@ -930,7 +936,7 @@ ${Object.keys(calculated).map(key => `${calculated[key].fullAddress}: Chicken ${
             </div>
           </div>
 
-          <h3>Messages</h3>
+         <h3>Messages</h3>
           <label>Poll Message:</label>
           <textarea
             value={pollMessage}
@@ -938,6 +944,28 @@ ${Object.keys(calculated).map(key => `${calculated[key].fullAddress}: Chicken ${
             style={{ width: '100%', minHeight: '80px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
             placeholder="Hi! Are you available? Vote here: {LINK} Closes: {CUTOFF}"
           />
+
+          <label>Delivery Message Header (sent to drivers):</label>
+          <textarea
+            value={deliveryMessage}
+            onChange={(e) => setDeliveryMessage(e.target.value)}
+            style={{ width: '100%', minHeight: '80px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
+            placeholder="📦 DELIVERY LIST FOR {DRIVER} ..."
+          />
+          <p style={{ fontSize: '12px', color: '#666', marginTop: '-5px', marginBottom: '15px' }}>
+            Use {'{DRIVER}'}, {'{DATE}'}, and {'{STOPS}'} as placeholders.
+          </p>
+
+          <label>Butcher Email Template:</label>
+          <textarea
+            value={butcherEmailTemplate}
+            onChange={(e) => setButcherEmailTemplate(e.target.value)}
+            style={{ width: '100%', minHeight: '120px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
+            placeholder="Hi, please prepare ..."
+          />
+          <p style={{ fontSize: '12px', color: '#666', marginTop: '-5px', marginBottom: '15px' }}>
+            Use {'{DATE}'}, {'{CHICKEN}'}, {'{MEAT}'}, and {'{PIES}'} as placeholders.
+          </p>
         </div>
       )}
 
