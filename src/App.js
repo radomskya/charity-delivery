@@ -129,7 +129,7 @@ export default function CharityDeliverySystem() {
         setAnchorDate(data.anchorDate || '2024-06-06');
         setAnchorWeek(data.anchorWeek || 'A');
         setAnchorFirstOfMonth(data.anchorFirstOfMonth !== false);
-        set(data. || pollMessage);
+        setPollResponses(data.pollResponses || {});
         setPollMessage(data.pollMessage || pollMessage);
         setDeliveryMessage(data.deliveryMessage || deliveryMessage);
         setButcherEmailTemplate(data.butcherEmailTemplate || butcherEmailTemplate);
