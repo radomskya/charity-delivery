@@ -438,7 +438,7 @@ export default function CharityDeliverySystem() {
     setShowAddDriver(false);
   };
 
-  const deleteDriver = (name) => {
+ const deleteDriver = (name) => {
     if (window.confirm(`Delete driver ${name}?`)) {
       const newDrivers = { ...drivers };
       delete newDrivers[name];
@@ -448,6 +448,39 @@ export default function CharityDeliverySystem() {
       delete newPhones[name];
       setDriverPhones(newPhones);
     }
+  };
+
+  // ============================================================================
+  // BACKUP / EXPORT
+  // ============================================================================
+
+  const exportData = () => {
+    const dataToExport = {
+      addresses,
+      drivers,
+      driverPhones,
+      driverPreferences,
+      anchorDate,
+      anchorWeek,
+      anchorFirstOfMonth,
+      pollMessage,
+      deliveryMessage,
+      butcherEmailTemplate,
+      cutoffDay,
+      cutoffHour,
+      cutoffMinute,
+      forceUKTime,
+      exportedAt: new Date().toISOString()
+    };
+
+    const dataStr = JSON.stringify(dataToExport, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `charity-backup-${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   // ============================================================================
@@ -1035,8 +1068,25 @@ export default function CharityDeliverySystem() {
       {/* ANALYTICS TAB */}
       {activeTab === 'analytics' && (
         <div>
-          <h2>📊 Analytics</h2>
-          <p>Analytics dashboard coming soon...</p>
+          <h2>📊 Analytics & Backup</h2>
+
+          <h3>Backup Your Data</h3>
+          <div style={{ backgroundColor: '#f5f5f5', padding: '15px', borderRadius: '4px', marginBottom: '20px' }}>
+            <p style={{ marginTop: 0, fontSize: '13px', color: '#666' }}>
+              Download all your data (addresses, drivers, settings, templates) as a file you can keep safe.
+            </p>
+            <button
+              onClick={exportData}
+              style={{ padding: '10px 20px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}
+            >
+              📥 Download Backup
+            </button>
+          </div>
+
+          <h3>Delivery Analytics</h3>
+          <p style={{ fontSize: '13px', color: '#666' }}>
+            Delivery tracking will appear here once driver allocation is set up.
+          </p>
         </div>
       )}
     </div>
