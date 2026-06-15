@@ -75,7 +75,7 @@ export default function CharityDeliverySystem() {
 
   // Poll system
   const [pollMode, setPollMode] = useState(false);
-  const [pollResponses, pollResponses] = useState({});
+  const [pollResponses, setPollResponses] = useState({});
   const [allocations, setAllocations] = useState({});
   const [autoAllocated, setAutoAllocated] = useState(false);
 
