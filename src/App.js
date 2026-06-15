@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
-import { getDatabase, ref, set, onValue } from 'firebase/database';
+import { getDatabase, ref, set, onValue, get } from 'firebase/database';
 
 // ============================================================================
 // FIREBASE CONFIGURATION
@@ -91,6 +91,10 @@ export default function CharityDeliverySystem() {
 
   // UI feedback
   const [copiedMessage, setCopiedMessage] = useState('');
+
+  // Poll voting
+  const [activePollId, setActivePollId] = useState('');
+  const [pollVotes, setPollVotes] = useState({});
 
   // Cutoff & timezone
   const [cutoffDay, setCutoffDay] = useState('thursday');
@@ -449,7 +453,71 @@ export default function CharityDeliverySystem() {
       setDriverPhones(newPhones);
     }
   };
+  
+// ============================================================================
+  // POLL VOTING (public, privacy-preserving)
+  // ============================================================================
 
+  // Normalise a phone number: strip everything non-digit, drop leading 44 or 0
+  const normalisePhone = (phone) => {
+    let digits = (phone || '').replace(/\D/g, '');
+    if (digits.startsWith('44')) digits = digits.slice(2);
+    if (digits.startsWith('0')) digits = digits.slice(1);
+    return digits;
+  };
+
+  // Simple deterministic fingerprint of a normalised phone (not reversible to the number)
+  const hashPhone = (phone) => {
+    const normalised = normalisePhone(phone);
+    let hash = 5381;
+    for (let i = 0; i < normalised.length; i++) {
+      hash = ((hash << 5) + hash + normalised.charCodeAt(i)) >>> 0;
+    }
+    return 'p' + hash.toString(16);
+  };
+
+  const openPollForVoting = () => {
+    if (!selectedDate) {
+      alert('Pick a delivery date first (in the Poll tab).');
+      return;
+    }
+    if (Object.keys(drivers).length === 0) {
+      alert('Add at least one driver first.');
+      return;
+    }
+
+    // Build a roster of hashed phone -> name. No real numbers leave your private data.
+    const roster = {};
+    let missingPhone = false;
+    Object.keys(drivers).forEach((name) => {
+      const phone = driverPhones[name];
+      if (!phone || !normalisePhone(phone)) {
+        missingPhone = true;
+        return;
+      }
+      roster[hashPhone(phone)] = name;
+    });
+
+    if (missingPhone) {
+      if (!window.confirm('Some drivers have no phone number and will not be able to vote. Continue anyway?')) {
+        return;
+      }
+    }
+
+    const pollId = `${selectedDate}-${Date.now().toString(36)}`;
+
+    set(ref(db, `polls/${pollId}`), {
+      date: selectedDate,
+      createdAt: new Date().toISOString(),
+      roster,
+      votes: {}
+    }).then(() => {
+      setActivePollId(pollId);
+    }).catch((err) => {
+      alert('Could not open poll: ' + err.message);
+    });
+  };
+  
   // ============================================================================
   // BACKUP / EXPORT
   // ============================================================================
@@ -847,6 +915,43 @@ export default function CharityDeliverySystem() {
                     Triple
                   </label>
                 </div>
+              </div>
+
+              <div style={{ backgroundColor: '#fff8e1', padding: '15px', marginBottom: '20px', borderRadius: '4px', border: '1px solid #ffe082' }}>
+                <h3 style={{ marginTop: 0 }}>Driver Availability Poll</h3>
+                <p style={{ fontSize: '13px', color: '#666' }}>
+                  Opens a poll for this date. Drivers confirm their mobile number, then vote. Phone numbers are stored only as a secure fingerprint, never in the open.
+                </p>
+                <button
+                  onClick={openPollForVoting}
+                  style={{ padding: '10px 20px', backgroundColor: '#FF9800', color: 'white', border: 'none', cursor: 'pointer' }}
+                >
+                  📣 Open Poll for Voting
+                </button>
+
+                {activePollId && (
+                  <div style={{ marginTop: '15px' }}>
+                    <p style={{ margin: '5px 0', fontSize: '13px' }}><strong>Poll is live!</strong> Share this link with your drivers:</p>
+                    <input
+                      type="text"
+                      readOnly
+                      value={`${window.location.origin}/vote.html?poll=${activePollId}`}
+                      style={{ width: '100%', padding: '8px', boxSizing: 'border-box', fontSize: '13px' }}
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${window.location.origin}/vote.html?poll=${activePollId}`);
+                        setCopiedMessage('Link copied!');
+                        setTimeout(() => setCopiedMessage(''), 2000);
+                      }}
+                      style={{ marginTop: '8px', padding: '8px 16px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}
+                    >
+                      Copy Link
+                    </button>
+                    {copiedMessage && <span style={{ marginLeft: '10px', color: 'green' }}>{copiedMessage}</span>}
+                  </div>
+                )}
               </div>
             </>
           )}
