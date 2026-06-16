@@ -40,7 +40,7 @@ export default function CharityDeliverySystem() {
   const [authError, setAuthError] = useState('');
 
   // UI Navigation
-  const [activeTab, setActiveTab] = useState('setup');
+  const [activeTab, setActiveTab] = useState('addresses');
   const [showAddAddress, setShowAddAddress] = useState(false);
   const [showAddDriver, setShowAddDriver] = useState(false);
   const [editingDriverName, setEditingDriverName] = useState('');
@@ -87,6 +87,8 @@ export default function CharityDeliverySystem() {
   const [pollMessage, setPollMessage] = useState('Hi! Quick question - are you available for delivery on {DATE}? Please vote by {CUTOFF}: {LINK}');
   const [emailTemplate, setEmailTemplate] = useState('');
   const [weekTotals, setWeekTotals] = useState({ chicken: 0, meat: 0, pies: 0 });
+  const [broughtForwardTotal, setBroughtForwardTotal] = useState(0);
+  const [deliveryHistory, setDeliveryHistory] = useState({});
   const [deliveryMessage, setDeliveryMessage] = useState('📦 DELIVERY LIST FOR {DRIVER}\n📅 Week of: {DATE}\n🚗 Total stops: {STOPS}');
   const [butcherEmailTemplate, setButcherEmailTemplate] = useState('Hi,\n\nPlease prepare the following for collection on {DATE}:\n\n🍗 Chicken: {CHICKEN}\n🍖 Meat: {MEAT}\n🥧 Pies: {PIES}\n\nThank you!');
 
@@ -151,6 +153,8 @@ export default function CharityDeliverySystem() {
         setAvailableDrivers(data.availableDrivers || {});
         setWeekOverrides(data.weekOverrides || {});
         setActivePollId(data.activePollId || '');
+        setBroughtForwardTotal(data.broughtForwardTotal || 0);
+        setDeliveryHistory(data.deliveryHistory || {});
         // Restore the selected delivery date and recompute week type
         if (data.selectedDate) {
           setSelectedDate(data.selectedDate);
@@ -190,6 +194,8 @@ export default function CharityDeliverySystem() {
       availableDrivers,
       weekOverrides,
       activePollId: activePollId || null,
+      broughtForwardTotal,
+      deliveryHistory,
       selectedDate: selectedDate || null,
       deliveryType
     });
@@ -198,7 +204,7 @@ export default function CharityDeliverySystem() {
   useEffect(() => {
     const timer = setTimeout(saveData, 1000);
     return () => clearTimeout(timer);
-  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, activePollId, selectedDate, deliveryType, user]);
+  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, activePollId, broughtForwardTotal, deliveryHistory, selectedDate, deliveryType, user]);
 
   // ============================================================================
   // DATE HELPERS (pure, usable from load before state is set)
@@ -347,6 +353,24 @@ export default function CharityDeliverySystem() {
       });
     }
     return weeks;
+  };
+
+  // How many actual deliveries an address represents for the round: one per covered
+  // week where it has any items. A double where the address only has Week-A items = 1;
+  // both weeks with items = 2. A triple where only first-of-month qualifies = 1.
+  const addressDeliveryCount = (address, deliveryDate, deliveryTypeSelected) => {
+    if (!address) return 0;
+    const weeks = coveredWeeks(deliveryDate, deliveryTypeSelected);
+    let count = 0;
+    weeks.forEach((wk) => {
+      const base = wk.weekType === 'A' ? address.weekA : address.weekB;
+      let c = (base && (base.chicken || base.meat || base.pies)) ? 1 : 0;
+      if (wk.firstOfMonth && address.firstOfMonth && (address.firstOfMonth.chicken || address.firstOfMonth.meat || address.firstOfMonth.pies)) {
+        c = 1; // qualifies via first-of-month items even if the base week is empty
+      }
+      count += c;
+    });
+    return count;
   };
 
   const combineRules = (address, deliveryDate, deliveryTypeSelected) => {
@@ -738,6 +762,7 @@ export default function CharityDeliverySystem() {
       anchorDate, anchorWeek, anchorFirstOfMonth,
       pollMessage, deliveryMessage, butcherEmailTemplate,
       cutoffDay, cutoffHour, cutoffMinute, forceUKTime,
+      broughtForwardTotal, deliveryHistory,
       exportedAt: new Date().toISOString()
     };
     const dataStr = JSON.stringify(dataToExport, null, 2);
@@ -1002,6 +1027,34 @@ export default function CharityDeliverySystem() {
     }
     setAllocations(proposedAllocation);
     setAllocationApproved(true);
+
+    // Record this round into delivery history, keyed by delivery date (overwrite on re-approve).
+    const perDriver = {};
+    let totC = 0, totM = 0, totP = 0, totDeliveries = 0;
+    Object.keys(proposedAllocation).forEach((driver) => {
+      if (driver === '__unassigned') return;
+      const keys = proposedAllocation[driver] || [];
+      let dCount = 0, c = 0, m = 0, p = 0;
+      keys.forEach((key) => {
+        const address = addresses[key];
+        dCount += addressDeliveryCount(address, selectedDate, deliveryType);
+        const q = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+        c += q.chicken; m += q.meat; p += q.pies;
+      });
+      perDriver[driver] = { deliveries: dCount, chicken: c, meat: m, pies: p, stops: keys.length };
+      totDeliveries += dCount; totC += c; totM += m; totP += p;
+    });
+    setDeliveryHistory((prev) => ({
+      ...prev,
+      [selectedDate]: {
+        date: selectedDate,
+        deliveryType,
+        approvedAt: new Date().toISOString(),
+        perDriver,
+        totals: { deliveries: totDeliveries, chicken: totC, meat: totM, pies: totP }
+      }
+    }));
+
     setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
   };
 
@@ -1015,8 +1068,39 @@ export default function CharityDeliverySystem() {
   // ============================================================================
 
   const buildRouteLink = (keys) => {
-    // Use coordinates if available, else the postal address text, as Google Maps waypoints.
-    const parts = keys.map((key) => {
+    // Order stops by a nearest-neighbour path so the route is geographically sensible
+    // (Google Maps follows the order given; it doesn't reorder waypoints itself).
+    const withCoords = keys.filter((k) => {
+      const a = addresses[k] || {};
+      return typeof a.lat === 'number' && typeof a.lng === 'number';
+    });
+    const noCoords = keys.filter((k) => {
+      const a = addresses[k] || {};
+      return !(typeof a.lat === 'number' && typeof a.lng === 'number');
+    });
+    const dist = (a, b) => {
+      const dlat = a.lat - b.lat, dlng = a.lng - b.lng;
+      return Math.sqrt(dlat * dlat + dlng * dlng);
+    };
+    let ordered = [];
+    if (withCoords.length > 0) {
+      const remaining = withCoords.slice();
+      let current = remaining.shift(); // start at the first stop
+      ordered.push(current);
+      while (remaining.length > 0) {
+        const cur = addresses[current];
+        let bestIdx = 0, bestDist = Infinity;
+        remaining.forEach((k, idx) => {
+          const d = dist(cur, addresses[k]);
+          if (d < bestDist) { bestDist = d; bestIdx = idx; }
+        });
+        current = remaining.splice(bestIdx, 1)[0];
+        ordered.push(current);
+      }
+    }
+    ordered = ordered.concat(noCoords); // any un-geocoded stops at the end
+
+    const parts = ordered.map((key) => {
       const a = addresses[key] || {};
       if (typeof a.lat === 'number' && typeof a.lng === 'number') {
         return `${a.lat},${a.lng}`;
@@ -1261,7 +1345,7 @@ export default function CharityDeliverySystem() {
       </div>
 
       <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '2px solid #ddd', flexWrap: 'wrap' }}>
-        {['setup', 'poll', 'summary', 'allocate', 'send', 'analytics', 'settings'].map((tab) => (
+        {['addresses', 'drivers', 'poll', 'summary', 'allocate', 'send', 'analytics', 'settings'].map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{
               padding: '10px 20px',
@@ -1275,10 +1359,10 @@ export default function CharityDeliverySystem() {
         ))}
       </div>
 
-      {/* SETUP TAB */}
-      {activeTab === 'setup' && (
+      {/* ADDRESSES TAB */}
+      {activeTab === 'addresses' && (
         <div>
-          <h2>📋 Setup</h2>
+          <h2>📋 Addresses</h2>
           <h3>Addresses</h3>
           <button onClick={startAddAddress} style={{ padding: '8px 16px', marginBottom: '10px' }}>
             ➕ Add Address
@@ -1463,8 +1547,14 @@ export default function CharityDeliverySystem() {
               );
             })}
           </div>
+        </div>
+      )}
 
-          <h3 style={{ marginTop: '30px' }}>Drivers</h3>
+      {/* DRIVERS TAB */}
+      {activeTab === 'drivers' && (
+        <div>
+          <h2>🚗 Drivers</h2>
+          <h3 style={{ marginTop: '0' }}>Drivers</h3>
           <button onClick={startAddDriver} style={{ padding: '8px 16px', marginBottom: '10px' }}>➕ Add Driver</button>
 
           {showAddDriver && (
@@ -1901,6 +1991,14 @@ export default function CharityDeliverySystem() {
       {activeTab === 'settings' && (
         <div>
           <h2>⚙️ Settings</h2>
+          <h3>📊 Brought Forward Total</h3>
+          <div style={{ backgroundColor: '#f3e5f5', padding: '15px', borderRadius: '4px', marginBottom: '20px', border: '2px solid #ba68c8' }}>
+            <p style={{ marginTop: 0, fontSize: '13px', color: '#666' }}>Deliveries completed before you started using this system. This is added to the analytics totals.</p>
+            <label style={{ fontWeight: 'bold' }}>Total deliveries brought forward: </label>
+            <input type="number" min="0" value={broughtForwardTotal}
+              onChange={(e) => setBroughtForwardTotal(parseInt(e.target.value) || 0)}
+              style={{ padding: '8px', fontSize: '16px', fontWeight: 'bold', width: '120px', marginLeft: '8px' }} />
+          </div>
           <h3>Anchor Date Configuration</h3>
           <div style={{ backgroundColor: '#f5f5f5', padding: '15px', borderRadius: '4px', marginBottom: '20px' }}>
             <label>Anchor Date (First Delivery):</label>
@@ -1982,63 +2080,119 @@ export default function CharityDeliverySystem() {
             </button>
           </div>
           <h3>Delivery Analytics</h3>
-          {!allocationApproved ? (
-            <p style={{ fontSize: '13px', color: '#666' }}>Approve an allocation (in the Allocate tab) to see delivery stats here.</p>
-          ) : (
-            <div>
-              <div style={{ backgroundColor: '#e8f5e9', padding: '12px', borderRadius: '4px', marginBottom: '15px' }}>
-                <strong>Approved plan for {formatUKDate(selectedDate)}</strong>
-              </div>
-              {(() => {
-                const driverList = Object.keys(allocations).filter(d => d !== '__unassigned');
-                let totC = 0, totM = 0, totP = 0, totStops = 0;
-                driverList.forEach(d => {
-                  (allocations[d] || []).forEach(key => {
-                    const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
-                    totC += c.chicken; totM += c.meat; totP += c.pies; totStops += 1;
-                  });
-                });
-                return (
+          {(() => {
+            const dates = Object.keys(deliveryHistory).sort().reverse();
+            // This period = sum of all recorded history
+            let periodDeliveries = 0;
+            const driverTotals = {}; // driver -> {deliveries, dates:Set}
+            let totC = 0, totM = 0, totP = 0;
+            dates.forEach((dt) => {
+              const rec = deliveryHistory[dt];
+              if (!rec) return;
+              periodDeliveries += (rec.totals && rec.totals.deliveries) || 0;
+              totC += (rec.totals && rec.totals.chicken) || 0;
+              totM += (rec.totals && rec.totals.meat) || 0;
+              totP += (rec.totals && rec.totals.pies) || 0;
+              Object.keys(rec.perDriver || {}).forEach((d) => {
+                if (!driverTotals[d]) driverTotals[d] = { deliveries: 0, dates: 0 };
+                driverTotals[d].deliveries += rec.perDriver[d].deliveries || 0;
+                driverTotals[d].dates += 1;
+              });
+            });
+            const grandTotal = broughtForwardTotal + periodDeliveries;
+            const driverNames = Object.keys(driverTotals).sort((a, b) => driverTotals[b].deliveries - driverTotals[a].deliveries);
+            return (
+              <div>
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '20px' }}>
+                  <div style={{ flex: 1, minWidth: '130px', background: '#e3f2fd', border: '2px solid #1976d2', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '26px', fontWeight: 'bold' }}>{broughtForwardTotal}</div>
+                    <div style={{ fontSize: '12px', color: '#666' }}>Brought forward</div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: '130px', background: '#e8f5e9', border: '2px solid #4CAF50', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '26px', fontWeight: 'bold' }}>{periodDeliveries}</div>
+                    <div style={{ fontSize: '12px', color: '#666' }}>This period ({dates.length} rounds)</div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: '130px', background: '#f3e5f5', border: '2px solid #9c27b0', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '26px', fontWeight: 'bold' }}>{grandTotal}</div>
+                    <div style={{ fontSize: '12px', color: '#666' }}>Total deliveries</div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: '130px', background: '#fff3e0', border: '2px solid #ff9800', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '26px', fontWeight: 'bold' }}>{driverNames.length}</div>
+                    <div style={{ fontSize: '12px', color: '#666' }}>Active drivers</div>
+                  </div>
+                </div>
+
+                {dates.length === 0 ? (
+                  <p style={{ fontSize: '13px', color: '#666' }}>No delivery rounds recorded yet. Approve an allocation in the Allocate tab and it will be recorded here.</p>
+                ) : (
                   <>
-                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '15px' }}>
-                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{driverList.length}</strong><br/>drivers</div>
-                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{totStops}</strong><br/>stops</div>
-                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{totC}</strong> 🍗<br/>chicken</div>
-                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{totM}</strong> 🍖<br/>meat</div>
-                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{totP}</strong> 🥧<br/>pies</div>
-                    </div>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                    <h4>Deliveries by Driver</h4>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', marginBottom: '20px' }}>
                       <tbody>
                         <tr style={{ background: '#f0f0f0' }}>
                           <th style={{ padding: '8px', textAlign: 'left', borderBottom: '2px solid #333' }}>Driver</th>
-                          <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>Stops</th>
+                          <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>Rounds</th>
+                          <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>Total deliveries</th>
+                        </tr>
+                        {driverNames.map((d) => (
+                          <tr key={d} style={{ borderBottom: '1px solid #ddd' }}>
+                            <td style={{ padding: '8px' }}>{d}</td>
+                            <td style={{ padding: '8px', textAlign: 'center' }}>{driverTotals[d].dates}</td>
+                            <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold' }}>{driverTotals[d].deliveries}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    <h4>Order Totals Over Time</h4>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', marginBottom: '10px' }}>
+                      <tbody>
+                        <tr style={{ background: '#f0f0f0' }}>
+                          <th style={{ padding: '8px', textAlign: 'left', borderBottom: '2px solid #333' }}>Date</th>
+                          <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>Deliveries</th>
                           <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>🍗</th>
                           <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>🍖</th>
                           <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>🥧</th>
                         </tr>
-                        {driverList.map(d => {
-                          let c=0,m=0,p=0;
-                          (allocations[d] || []).forEach(key => {
-                            const q = calculatedAddresses[key] || { chicken:0,meat:0,pies:0 };
-                            c+=q.chicken; m+=q.meat; p+=q.pies;
-                          });
+                        {dates.map((dt) => {
+                          const rec = deliveryHistory[dt];
+                          const t = (rec && rec.totals) || { deliveries: 0, chicken: 0, meat: 0, pies: 0 };
                           return (
-                            <tr key={d} style={{ borderBottom: '1px solid #ddd' }}>
-                              <td style={{ padding: '8px' }}>{d}</td>
-                              <td style={{ padding: '8px', textAlign: 'center' }}>{(allocations[d]||[]).length}</td>
-                              <td style={{ padding: '8px', textAlign: 'center' }}>{c}</td>
-                              <td style={{ padding: '8px', textAlign: 'center' }}>{m}</td>
-                              <td style={{ padding: '8px', textAlign: 'center' }}>{p}</td>
+                            <tr key={dt} style={{ borderBottom: '1px solid #ddd' }}>
+                              <td style={{ padding: '8px' }}>{formatUKDate(dt)}{rec && rec.deliveryType && rec.deliveryType !== 'single' ? ` (${rec.deliveryType})` : ''}</td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>{t.deliveries}</td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>{t.chicken}</td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>{t.meat}</td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>{t.pies}</td>
                             </tr>
                           );
                         })}
+                        <tr style={{ borderTop: '2px solid #333', fontWeight: 'bold' }}>
+                          <td style={{ padding: '8px' }}>Period total</td>
+                          <td style={{ padding: '8px', textAlign: 'center' }}>{periodDeliveries}</td>
+                          <td style={{ padding: '8px', textAlign: 'center' }}>{totC}</td>
+                          <td style={{ padding: '8px', textAlign: 'center' }}>{totM}</td>
+                          <td style={{ padding: '8px', textAlign: 'center' }}>{totP}</td>
+                        </tr>
                       </tbody>
                     </table>
+
+                    <div style={{ marginTop: '20px', padding: '12px', background: '#fafafa', border: '1px solid #ddd', borderRadius: '4px' }}>
+                      <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#666' }}>Clear the delivery history for a fresh period. Your "brought forward" number is kept — add this period's total to it first if you want a running grand total.</p>
+                      <button onClick={() => {
+                          if (window.confirm('Clear all recorded delivery rounds? The brought-forward number stays. This cannot be undone.')) {
+                            setDeliveryHistory({});
+                          }
+                        }}
+                        style={{ padding: '8px 16px', backgroundColor: '#fff', color: '#c62828', border: '1px solid #c62828', cursor: 'pointer', fontSize: '13px' }}>
+                        🗑️ Clear History
+                      </button>
+                    </div>
                   </>
-                );
-              })()}
-            </div>
-          )}
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
