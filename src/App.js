@@ -203,11 +203,12 @@ export default function CharityDeliverySystem() {
     const anchor = new Date(aDate);
     const selected = new Date(date);
     const daysDiff = Math.floor((selected - anchor) / (1000 * 60 * 60 * 24));
-    const cyclePosition = Math.floor(daysDiff / 14);
+    // Alternate every 7 days from the anchor, straight through month boundaries.
+    const weeksSinceAnchor = Math.floor(daysDiff / 7);
     if (aWeek === 'A') {
-      return (cyclePosition % 2 === 0) ? 'A' : 'B';
+      return (Math.abs(weeksSinceAnchor) % 2 === 0) ? 'A' : 'B';
     } else {
-      return (cyclePosition % 2 === 0) ? 'B' : 'A';
+      return (Math.abs(weeksSinceAnchor) % 2 === 0) ? 'B' : 'A';
     }
   };
 
