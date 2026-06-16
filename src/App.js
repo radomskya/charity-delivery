@@ -75,6 +75,10 @@ export default function CharityDeliverySystem() {
   const [pollResponses, setPollResponses] = useState({});
   const [allocations, setAllocations] = useState({});
   const [autoAllocated, setAutoAllocated] = useState(false);
+  const [pollVotes, setPollVotes] = useState({});
+  const [availableDrivers, setAvailableDrivers] = useState({});
+  const [proposedAllocation, setProposedAllocation] = useState({});
+  const [allocationApproved, setAllocationApproved] = useState(false);
 
   // Per-week overrides: { 'yyyy-mm-dd': { addressKey: { chicken, meat, pies, excluded } } }
   const [weekOverrides, setWeekOverrides] = useState({});
@@ -141,6 +145,9 @@ export default function CharityDeliverySystem() {
         setForceUKTime(data.forceUKTime !== false);
         setAllocations(data.allocations || {});
         setAutoAllocated(data.autoAllocated || false);
+        setProposedAllocation(data.proposedAllocation || {});
+        setAllocationApproved(data.allocationApproved || false);
+        setAvailableDrivers(data.availableDrivers || {});
         setWeekOverrides(data.weekOverrides || {});
         // Restore the selected delivery date and recompute week type
         if (data.selectedDate) {
@@ -176,6 +183,9 @@ export default function CharityDeliverySystem() {
       pollResponses,
       allocations,
       autoAllocated,
+      proposedAllocation,
+      allocationApproved,
+      availableDrivers,
       weekOverrides,
       selectedDate: selectedDate || null,
       deliveryType
@@ -185,7 +195,7 @@ export default function CharityDeliverySystem() {
   useEffect(() => {
     const timer = setTimeout(saveData, 1000);
     return () => clearTimeout(timer);
-  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, weekOverrides, selectedDate, deliveryType, user]);
+  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, selectedDate, deliveryType, user]);
 
   // ============================================================================
   // DATE HELPERS (pure, usable from load before state is set)
@@ -708,6 +718,138 @@ export default function CharityDeliverySystem() {
   };
 
   // ============================================================================
+  // POLL RESULTS (live) + AVAILABILITY
+  // ============================================================================
+
+  // Listen to votes for the active poll
+  useEffect(() => {
+    if (!db || !activePollId) return;
+    const votesRef = ref(db, `polls/${activePollId}/votes`);
+    const unsub = onValue(votesRef, (snap) => {
+      const v = snap.val() || {};
+      setPollVotes(v);
+    });
+    return () => unsub();
+  }, [activePollId]);
+
+  // Seed availability from votes (available === true). Manual overrides preserved.
+  const seedAvailabilityFromVotes = () => {
+    const seed = {};
+    Object.keys(drivers).forEach((name) => { seed[name] = false; });
+    Object.values(pollVotes).forEach((vote) => {
+      if (vote && vote.name && vote.available) seed[vote.name] = true;
+    });
+    setAvailableDrivers(seed);
+  };
+
+  const toggleDriverAvailable = (name) => {
+    setAvailableDrivers(prev => ({ ...prev, [name]: !prev[name] }));
+  };
+
+  // ============================================================================
+  // ALLOCATION ALGORITHM
+  // ============================================================================
+
+  const runAutoAllocation = () => {
+    const avail = Object.keys(drivers).filter(d => availableDrivers[d]);
+    if (avail.length === 0) {
+      alert('No drivers marked available. Tick at least one driver, or seed from the poll results.');
+      return;
+    }
+    // Eligible addresses = the calculated ones for this date (already excludes held/excluded)
+    const keys = Object.keys(calculatedAddresses);
+    const result = {};
+    avail.forEach(d => { result[d] = []; });
+    const unassigned = [];
+
+    const addrInfo = (key) => addresses[key] || {};
+    const eligibleFor = (key) => {
+      const a = addrInfo(key);
+      const avoid = a.avoidDrivers || [];
+      return avail.filter(d => !avoid.includes(d));
+    };
+
+    // Step 1: preferred drivers
+    const remaining = [];
+    keys.forEach(key => {
+      const a = addrInfo(key);
+      const elig = eligibleFor(key);
+      if (a.preferredDriver && elig.includes(a.preferredDriver)) {
+        result[a.preferredDriver].push(key);
+      } else {
+        remaining.push(key);
+      }
+    });
+
+    const centroid = (driver) => {
+      const pts = result[driver].map(k => addrInfo(k)).filter(a => typeof a.lat === 'number');
+      if (pts.length === 0) return null;
+      return { lat: pts.reduce((s,a)=>s+a.lat,0)/pts.length, lng: pts.reduce((s,a)=>s+a.lng,0)/pts.length };
+    };
+    const dist = (a,b) => { if(!a||!b) return 0; const dlat=a.lat-b.lat, dlng=a.lng-b.lng; return Math.sqrt(dlat*dlat+dlng*dlng); };
+
+    // sort spatially
+    remaining.sort((k1,k2) => {
+      const a1=addrInfo(k1), a2=addrInfo(k2);
+      if (typeof a1.lat==='number' && typeof a2.lat==='number') {
+        if (a1.lat!==a2.lat) return a1.lat-a2.lat;
+        return (a1.lng||0)-(a2.lng||0);
+      }
+      return 0;
+    });
+
+    // Step 2: balance-by-count primary, nearness tie-break
+    remaining.forEach(key => {
+      const a = addrInfo(key);
+      const elig = eligibleFor(key);
+      if (elig.length === 0) { unassigned.push(key); return; }
+      const minCount = Math.min(...elig.map(d => result[d].length));
+      const candidates = elig.filter(d => result[d].length === minCount);
+      let best = candidates[0];
+      if (candidates.length > 1 && typeof a.lat === 'number') {
+        let bestDist = Infinity;
+        candidates.forEach(d => { const c = centroid(d); const dd = c ? dist(a,c) : 0; if (dd < bestDist) { bestDist=dd; best=d; } });
+      }
+      result[best].push(key);
+    });
+
+    if (unassigned.length > 0) {
+      result.__unassigned = unassigned;
+    }
+    setProposedAllocation(result);
+    setAllocationApproved(false);
+  };
+
+  // Move an address to a different driver (manual override in review)
+  const reassignAddress = (key, toDriver) => {
+    setProposedAllocation(prev => {
+      const next = {};
+      Object.keys(prev).forEach(d => { next[d] = prev[d].filter(k => k !== key); });
+      if (!next[toDriver]) next[toDriver] = [];
+      if (toDriver === '__unassigned') {
+        next.__unassigned = next.__unassigned || [];
+        next.__unassigned.push(key);
+      } else {
+        next[toDriver].push(key);
+      }
+      return next;
+    });
+  };
+
+  const approveAllocation = () => {
+    const hasUnassigned = proposedAllocation.__unassigned && proposedAllocation.__unassigned.length > 0;
+    if (hasUnassigned) {
+      if (!window.confirm('Some addresses are unassigned. Approve anyway?')) return;
+    }
+    setAllocations(proposedAllocation);
+    setAllocationApproved(true);
+  };
+
+  const unlockAllocation = () => {
+    setAllocationApproved(false);
+  };
+
+  // ============================================================================
   // RENDER
   // ============================================================================
 
@@ -750,7 +892,7 @@ export default function CharityDeliverySystem() {
       </div>
 
       <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '2px solid #ddd', flexWrap: 'wrap' }}>
-        {['setup', 'poll', 'summary', 'send', 'analytics', 'settings'].map((tab) => (
+        {['setup', 'poll', 'summary', 'allocate', 'send', 'analytics', 'settings'].map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{
               padding: '10px 20px',
@@ -935,7 +1077,9 @@ export default function CharityDeliverySystem() {
                     </span>
                   )}
                   <p style={{ margin: '5px 0', fontSize: '12px' }}>
-                    W.A: {a.weekA.chicken} chicken, {a.weekA.meat} meat | W.B: {a.weekB.chicken} chicken, {a.weekB.meat} meat
+                    <strong>Week A:</strong> {a.weekA.chicken}🍗 {a.weekA.meat}🍖 {a.weekA.pies}🥧<br />
+                    <strong>Week B:</strong> {a.weekB.chicken}🍗 {a.weekB.meat}🍖 {a.weekB.pies}🥧<br />
+                    <strong>First of Month:</strong> {(a.firstOfMonth?.chicken) || 0}🍗 {(a.firstOfMonth?.meat) || 0}🍖 {(a.firstOfMonth?.pies) || 0}🥧
                   </p>
                   {a.notes && <p style={{ margin: '5px 0', fontSize: '11px', color: '#666' }}>📝 {a.notes}</p>}
                   <div style={{ display: 'flex', gap: '8px' }}>
@@ -1103,6 +1247,117 @@ export default function CharityDeliverySystem() {
               {copiedMessage && <span style={{ marginLeft: '10px', color: 'green' }}>{copiedMessage}</span>}
             </>
           ) : (<p>Select a delivery date in the Poll tab first.</p>)}
+        </div>
+      )}
+
+      {/* ALLOCATE TAB */}
+      {activeTab === 'allocate' && (
+        <div>
+          <h2>🚚 Allocate Deliveries</h2>
+          {!selectedDate ? (
+            <p>Select a delivery date in the Poll tab first.</p>
+          ) : (
+            <>
+              <div style={{ backgroundColor: '#f5f5f5', padding: '15px', marginBottom: '15px', borderRadius: '4px' }}>
+                <strong>Delivery Date:</strong> {formatUKDate(selectedDate)} &nbsp;|&nbsp;
+                <strong>Stops:</strong> {Object.keys(calculatedAddresses).length}
+              </div>
+
+              {/* Availability */}
+              <h3>1. Driver Availability</h3>
+              <p style={{ fontSize: '13px', color: '#666' }}>
+                {activePollId ? 'Live from the poll. Tick or untick to override.' : 'No active poll — tick who is available this week.'}
+              </p>
+              {activePollId && (
+                <button onClick={seedAvailabilityFromVotes}
+                  style={{ padding: '8px 16px', marginBottom: '10px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>
+                  ↺ Load poll results
+                </button>
+              )}
+              <div style={{ marginBottom: '20px' }}>
+                {Object.keys(drivers).length === 0 && <p style={{ color: '#999' }}>Add drivers first.</p>}
+                {Object.keys(drivers).map((name) => {
+                  // find this driver's vote
+                  let voted = null;
+                  Object.values(pollVotes).forEach(v => { if (v && v.name === name) voted = v.available; });
+                  return (
+                    <label key={name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0' }}>
+                      <input type="checkbox" checked={!!availableDrivers[name]} onChange={() => toggleDriverAvailable(name)} />
+                      <strong>{name}</strong>
+                      {voted === true && <span style={{ fontSize: '12px', color: 'green' }}>✓ voted available</span>}
+                      {voted === false && <span style={{ fontSize: '12px', color: '#c62828' }}>✗ voted not available</span>}
+                      {voted === null && <span style={{ fontSize: '12px', color: '#999' }}>no vote</span>}
+                    </label>
+                  );
+                })}
+              </div>
+
+              {/* Run allocation */}
+              <h3>2. Auto-Allocate</h3>
+              <p style={{ fontSize: '13px', color: '#666' }}>
+                Balances stops evenly across available drivers, keeps each driver's stops geographically close, honours preferred and avoided drivers.
+              </p>
+              <button onClick={runAutoAllocation} disabled={allocationApproved}
+                style={{ padding: '10px 20px', backgroundColor: allocationApproved ? '#999' : '#FF9800', color: 'white', border: 'none', cursor: allocationApproved ? 'default' : 'pointer', marginBottom: '20px' }}>
+                ⚙️ Run Auto-Allocation
+              </button>
+
+              {/* Review */}
+              {Object.keys(proposedAllocation).length > 0 && (
+                <>
+                  <h3>3. Review {allocationApproved && <span style={{ color: 'green', fontSize: '14px' }}>✓ Approved</span>}</h3>
+                  <p style={{ fontSize: '13px', color: '#666' }}>
+                    {allocationApproved ? 'This plan is approved and locked. Unlock to make changes.' : 'Move any address to a different driver, then approve.'}
+                  </p>
+                  {Object.keys(proposedAllocation).filter(d => d !== '__unassigned').map((driver) => (
+                    <div key={driver} style={{ border: '1px solid #ddd', borderRadius: '4px', padding: '12px', marginBottom: '12px' }}>
+                      <strong>{driver}</strong> <span style={{ color: '#666', fontSize: '13px' }}>({proposedAllocation[driver].length} stops)</span>
+                      {proposedAllocation[driver].length === 0 && <p style={{ fontSize: '12px', color: '#999', margin: '6px 0 0 0' }}>No stops</p>}
+                      {proposedAllocation[driver].map((key) => (
+                        <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0' }}>
+                          <span>{addresses[key] ? addresses[key].fullAddress : key}</span>
+                          {!allocationApproved && (
+                            <select value={driver} onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
+                              {Object.keys(drivers).filter(d => availableDrivers[d]).map(d => (<option key={d} value={d}>{d}</option>))}
+                              <option value="__unassigned">— unassign —</option>
+                            </select>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  {proposedAllocation.__unassigned && proposedAllocation.__unassigned.length > 0 && (
+                    <div style={{ border: '1px solid #f44336', borderRadius: '4px', padding: '12px', marginBottom: '12px', backgroundColor: '#ffebee' }}>
+                      <strong style={{ color: '#c62828' }}>⚠ Unassigned ({proposedAllocation.__unassigned.length})</strong>
+                      {proposedAllocation.__unassigned.map((key) => (
+                        <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', fontSize: '13px' }}>
+                          <span>{addresses[key] ? addresses[key].fullAddress : key}</span>
+                          {!allocationApproved && (
+                            <select value="__unassigned" onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
+                              <option value="__unassigned">— unassigned —</option>
+                              {Object.keys(drivers).filter(d => availableDrivers[d]).map(d => (<option key={d} value={d}>{d}</option>))}
+                            </select>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {!allocationApproved ? (
+                    <button onClick={approveAllocation}
+                      style={{ padding: '10px 20px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}>
+                      ✓ Approve Allocation
+                    </button>
+                  ) : (
+                    <button onClick={unlockAllocation}
+                      style={{ padding: '10px 20px', backgroundColor: '#FF9800', color: 'white', border: 'none', cursor: 'pointer' }}>
+                      🔓 Unlock to Edit
+                    </button>
+                  )}
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
 
