@@ -1353,33 +1353,47 @@ export default function CharityDeliverySystem() {
                     <div key={driver} style={{ border: '1px solid #ddd', borderRadius: '4px', padding: '12px', marginBottom: '12px' }}>
                       <strong>{driver}</strong> <span style={{ color: '#666', fontSize: '13px' }}>({proposedAllocation[driver].length} stops)</span>
                       {proposedAllocation[driver].length === 0 && <p style={{ fontSize: '12px', color: '#999', margin: '6px 0 0 0' }}>No stops</p>}
-                      {proposedAllocation[driver].map((key) => (
-                        <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0' }}>
-                          <span>{addresses[key] ? addresses[key].fullAddress : key}</span>
-                          {!allocationApproved && (
-                            <select value={driver} onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
-                              {Object.keys(drivers).filter(d => availableDrivers[d]).map(d => (<option key={d} value={d}>{d}</option>))}
-                              <option value="__unassigned">— unassign —</option>
-                            </select>
-                          )}
-                        </div>
-                      ))}
+                      {proposedAllocation[driver].map((key) => {
+                        const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+                        return (
+                          <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0', gap: '10px' }}>
+                            <div style={{ flex: 1 }}>
+                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong></div>
+                              <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
+                              {addresses[key] && addresses[key].notes && <div style={{ color: '#888', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
+                            </div>
+                            {!allocationApproved && (
+                              <select value={driver} onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
+                                {Object.keys(drivers).filter(d => availableDrivers[d]).map(d => (<option key={d} value={d}>{d}</option>))}
+                                <option value="__unassigned">— unassign —</option>
+                              </select>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   ))}
                   {proposedAllocation.__unassigned && proposedAllocation.__unassigned.length > 0 && (
                     <div style={{ border: '1px solid #f44336', borderRadius: '4px', padding: '12px', marginBottom: '12px', backgroundColor: '#ffebee' }}>
                       <strong style={{ color: '#c62828' }}>⚠ Unassigned ({proposedAllocation.__unassigned.length})</strong>
-                      {proposedAllocation.__unassigned.map((key) => (
-                        <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', fontSize: '13px' }}>
-                          <span>{addresses[key] ? addresses[key].fullAddress : key}</span>
-                          {!allocationApproved && (
-                            <select value="__unassigned" onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
-                              <option value="__unassigned">— unassigned —</option>
-                              {Object.keys(drivers).filter(d => availableDrivers[d]).map(d => (<option key={d} value={d}>{d}</option>))}
-                            </select>
-                          )}
-                        </div>
-                      ))}
+                      {proposedAllocation.__unassigned.map((key) => {
+                        const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+                        return (
+                          <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', gap: '10px' }}>
+                            <div style={{ flex: 1 }}>
+                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong></div>
+                              <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
+                              {addresses[key] && addresses[key].notes && <div style={{ color: '#888', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
+                            </div>
+                            {!allocationApproved && (
+                              <select value="__unassigned" onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
+                                <option value="__unassigned">— unassigned —</option>
+                                {Object.keys(drivers).filter(d => availableDrivers[d]).map(d => (<option key={d} value={d}>{d}</option>))}
+                              </select>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 
