@@ -410,10 +410,10 @@ export default function CharityDeliverySystem() {
     setCalculatedAddresses(calculated);
     setWeekTotals({ chicken: totalChicken, meat: totalMeat, pies: totalPies });
     const emailContent = butcherEmailTemplate
-      .replace(/{DATE}/g, formatUKDate(selectedDate))
-      .replace(/{CHICKEN}/g, totalChicken)
-      .replace(/{MEAT}/g, totalMeat)
-      .replace(/{PIES}/g, totalPies);
+      .replace(/\{DATE\}/g, formatUKDate(selectedDate))
+      .replace(/\{CHICKEN\}/g, totalChicken)
+      .replace(/\{MEAT\}/g, totalMeat)
+      .replace(/\{PIES\}/g, totalPies);
     setEmailTemplate(emailContent);
   };
 
@@ -430,9 +430,9 @@ export default function CharityDeliverySystem() {
     const dateStr = selectedDate || new Date().toISOString().split('T')[0];
     const addresses_array = Object.entries(calculatedAddresses);
     const headerText = deliveryMessage
-      .replace(/{DRIVER}/g, driverName)
-      .replace(/{DATE}/g, formatUKDate(dateStr))
-      .replace(/{STOPS}/g, addresses_array.length);
+      .replace(/\{DRIVER\}/g, driverName)
+      .replace(/\{DATE\}/g, formatUKDate(dateStr))
+      .replace(/\{STOPS\}/g, addresses_array.length);
     const headerHTML = headerText.split('\n').map(line => `<p style="margin: 5px 0; color: #333; font-weight: bold;">${line}</p>`).join('');
     const html = `
 <div style="font-family: Arial, sans-serif; padding: 20px; background: white; max-width: 600px;">
@@ -1029,9 +1029,9 @@ export default function CharityDeliverySystem() {
 
   const buildDriverCaption = (driverName, keys) => {
     const header = deliveryMessage
-      .replace(/{DRIVER}/g, driverName)
-      .replace(/{DATE}/g, formatUKDate(selectedDate))
-      .replace(/{STOPS}/g, keys.length);
+      .replace(/\{DRIVER\}/g, driverName)
+      .replace(/\{DATE\}/g, formatUKDate(selectedDate))
+      .replace(/\{STOPS\}/g, keys.length);
     const route = buildRouteLink(keys);
     return header + (route ? `\n\n🗺️ Route: ${route}` : '');
   };
@@ -1566,15 +1566,15 @@ export default function CharityDeliverySystem() {
                           const pollDateStr = activePollId.split('-').slice(0,3).join('-');
                           const link = `${window.location.origin}/vote.html?poll=${activePollId}`;
                           const msg = pollMessage
-                            .replace(/{DATE}/g, formatUKDate(pollDateStr))
-                            .replace(/{CUTOFF}/g, formatCutoff(pollDateStr))
-                            .replace(/{LINK}/g, link);
+                            .replace(/\{DATE\}/g, formatUKDate(pollDateStr))
+                            .replace(/\{CUTOFF\}/g, formatCutoff(pollDateStr))
+                            .replace(/\{LINK\}/g, link);
                           navigator.clipboard.writeText(msg);
                           setCopiedMessage('Message copied!');
                           setTimeout(() => setCopiedMessage(''), 2000);
                         }}
                         style={{ padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer', fontSize: '13px' }}>
-                        📋 Copy poll message (with link &amp; deadline)
+                        📋 Copy poll message (with link and deadline)
                       </button>
                     </div>
                     <div style={{ marginTop: '12px' }}>
