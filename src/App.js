@@ -22,21 +22,16 @@ try {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getDatabase(app);
-  console.log("Firebase initialized successfully!", { app, auth, db });
+  console.log("Firebase initialized successfully!");
 } catch (error) {
   console.error("Firebase initialization FAILED:", error);
 }
-
 
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
 
 export default function CharityDeliverySystem() {
-  // ============================================================================
-  // STATE VARIABLES
-  // ============================================================================
-
   // Authentication
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -50,12 +45,12 @@ export default function CharityDeliverySystem() {
   const [showAddDriver, setShowAddDriver] = useState(false);
   const [editingDriverName, setEditingDriverName] = useState('');
   const [editingDriverPhone, setEditingDriverPhone] = useState('');
+  const [editingDriverOriginal, setEditingDriverOriginal] = useState(null);
   const [editingAddress, setEditingAddress] = useState(null);
-  const [editingAddressForPreferences, setEditingAddressForPreferences] = useState(null);
+  const [geocoding, setGeocoding] = useState(false);
 
-  // Addresses with complete data structure
+  // Addresses
   const [addresses, setAddresses] = useState({});
-  // Structure: { "5 Market Street": { fullAddress, postcode, weekA: {chicken, meat, pies}, weekB: {chicken, meat, pies}, firstOfMonth: {chicken, meat, pies}, name, adults, children, notes } }
 
   // Anchor Date System
   const [anchorDate, setAnchorDate] = useState('2024-06-06');
@@ -66,11 +61,10 @@ export default function CharityDeliverySystem() {
   const [selectedDate, setSelectedDate] = useState(null);
   const [detectedWeekType, setDetectedWeekType] = useState(null);
   const [detectedFirstOfMonth, setDetectedFirstOfMonth] = useState(false);
-  const [deliveryType, setDeliveryType] = useState('single'); // 'single', 'double', 'triple'
+  const [deliveryType, setDeliveryType] = useState('single');
 
   // Calculated totals
   const [calculatedAddresses, setCalculatedAddresses] = useState({});
-  // Structure: { "5 Market Street": { chicken: 2, meat: 1, pies: 0, notes: "Door code: 1234..." } }
 
   // Drivers
   const [drivers, setDrivers] = useState({});
@@ -78,7 +72,6 @@ export default function CharityDeliverySystem() {
   const [driverPreferences, setDriverPreferences] = useState({});
 
   // Poll system
-  const [pollMode, setPollMode] = useState(false);
   const [pollResponses, setPollResponses] = useState({});
   const [allocations, setAllocations] = useState({});
   const [autoAllocated, setAutoAllocated] = useState(false);
@@ -94,7 +87,6 @@ export default function CharityDeliverySystem() {
 
   // Poll voting
   const [activePollId, setActivePollId] = useState('');
-  const [pollVotes, setPollVotes] = useState({});
 
   // Cutoff & timezone
   const [cutoffDay, setCutoffDay] = useState('thursday');
@@ -108,7 +100,6 @@ export default function CharityDeliverySystem() {
 
   useEffect(() => {
     if (!auth) return;
-    
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
@@ -118,7 +109,6 @@ export default function CharityDeliverySystem() {
         setLoading(false);
       }
     });
-
     return () => unsubscribe();
   }, []);
 
@@ -128,7 +118,6 @@ export default function CharityDeliverySystem() {
 
   const loadUserData = (userId) => {
     if (!db) return;
-    
     onValue(ref(db, `users/${userId}`), (snapshot) => {
       const data = snapshot.val();
       if (data) {
@@ -149,6 +138,15 @@ export default function CharityDeliverySystem() {
         setForceUKTime(data.forceUKTime !== false);
         setAllocations(data.allocations || {});
         setAutoAllocated(data.autoAllocated || false);
+        // Restore the selected delivery date and recompute week type
+        if (data.selectedDate) {
+          setSelectedDate(data.selectedDate);
+          setDeliveryType(data.deliveryType || 'single');
+          const wk = computeWeekType(data.selectedDate, data.anchorDate || '2024-06-06', data.anchorWeek || 'A');
+          const fm = computeFirstOfMonth(data.selectedDate) && (data.anchorFirstOfMonth !== false);
+          setDetectedWeekType(wk);
+          setDetectedFirstOfMonth(fm);
+        }
       }
       setLoading(false);
     });
@@ -156,7 +154,6 @@ export default function CharityDeliverySystem() {
 
   const saveData = () => {
     if (!user || !db) return;
-    
     set(ref(db, `users/${user.uid}`), {
       addresses,
       drivers,
@@ -174,56 +171,75 @@ export default function CharityDeliverySystem() {
       forceUKTime,
       pollResponses,
       allocations,
-      autoAllocated
+      autoAllocated,
+      selectedDate: selectedDate || null,
+      deliveryType
     });
   };
 
   useEffect(() => {
     const timer = setTimeout(saveData, 1000);
     return () => clearTimeout(timer);
-  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, user]);
+  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, selectedDate, deliveryType, user]);
 
   // ============================================================================
-  // ANCHOR DATE & WEEK DETECTION SYSTEM
+  // DATE HELPERS (pure, usable from load before state is set)
   // ============================================================================
 
   const formatUKDate = (dateString) => {
     if (!dateString) return '';
-    const parts = dateString.split('-'); // yyyy-mm-dd
+    const parts = dateString.split('-');
     if (parts.length !== 3) return dateString;
-    return `${parts[2]}-${parts[1]}-${parts[0]}`; // dd-mm-yyyy
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
   };
 
-  const detectWeekType = (date) => {
-    if (!anchorDate) return 'A';
-    
-    const anchor = new Date(anchorDate);
+  const computeWeekType = (date, aDate, aWeek) => {
+    if (!aDate) return 'A';
+    const anchor = new Date(aDate);
     const selected = new Date(date);
-    
     const daysDiff = Math.floor((selected - anchor) / (1000 * 60 * 60 * 24));
     const cyclePosition = Math.floor(daysDiff / 14);
-    
-    // If cycle position is even, return Week A; if odd, return Week B
-    if (anchorWeek === 'A') {
+    if (aWeek === 'A') {
       return (cyclePosition % 2 === 0) ? 'A' : 'B';
     } else {
       return (cyclePosition % 2 === 0) ? 'B' : 'A';
     }
   };
 
-  const isFirstOfMonth = (date) => {
+  const computeFirstOfMonth = (date) => {
     const d = new Date(date);
-    return d.getDate() <= 8; // Days 1-8 of month
+    return d.getDate() <= 8;
   };
+
+  const detectWeekType = (date) => computeWeekType(date, anchorDate, anchorWeek);
+  const isFirstOfMonth = (date) => computeFirstOfMonth(date);
 
   const handleDateSelection = (dateString) => {
     setSelectedDate(dateString);
     const detected = detectWeekType(dateString);
     const isFirstMonth = isFirstOfMonth(dateString);
-    
     setDetectedWeekType(detected);
     setDetectedFirstOfMonth(isFirstMonth && anchorFirstOfMonth);
-    setDeliveryType('single'); // Reset to single by default
+    setDeliveryType('single');
+  };
+
+  // ============================================================================
+  // ADDRESS HOLD CHECK
+  // ============================================================================
+
+  // Returns true if the address is on hold for the given date (yyyy-mm-dd)
+  const isOnHold = (address, dateString) => {
+    const hold = address.hold;
+    if (!hold || !hold.type || hold.type === 'none') return false;
+    if (hold.type === 'permanent') return true;
+    if (hold.type === 'range') {
+      if (!dateString) return false;
+      const d = dateString;
+      if (hold.from && d < hold.from) return false;
+      if (hold.to && d > hold.to) return false;
+      return true;
+    }
+    return false;
   };
 
   // ============================================================================
@@ -232,114 +248,79 @@ export default function CharityDeliverySystem() {
 
   const combineRules = (address, weekType, deliveryTypeSelected, isFirstMonth) => {
     if (!address) return { chicken: 0, meat: 0, pies: 0 };
-
     let result = { chicken: 0, meat: 0, pies: 0 };
-
     const addQuantities = (current, toAdd) => ({
       chicken: current.chicken + toAdd.chicken,
       meat: current.meat + toAdd.meat,
       pies: current.pies + toAdd.pies
     });
-
     if (deliveryTypeSelected === 'single') {
       result = weekType === 'A' ? { ...address.weekA } : { ...address.weekB };
-      
-      if (isFirstMonth) {
-        result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
-      }
+      if (isFirstMonth) result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
     } else if (deliveryTypeSelected === 'double') {
-      if (weekType === 'A') {
-        result = addQuantities(address.weekA, address.weekB);
-      } else {
-        result = addQuantities(address.weekB, address.weekA);
-      }
-      
-      if (isFirstMonth) {
-        result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
-      }
+      if (weekType === 'A') result = addQuantities(address.weekA, address.weekB);
+      else result = addQuantities(address.weekB, address.weekA);
+      if (isFirstMonth) result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
     } else if (deliveryTypeSelected === 'triple') {
-      if (weekType === 'A') {
-        result = addQuantities(addQuantities(address.weekA, address.weekB), address.weekA);
-      } else {
-        result = addQuantities(addQuantities(address.weekB, address.weekA), address.weekB);
-      }
-      
-      if (isFirstMonth) {
-        result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
-      }
+      if (weekType === 'A') result = addQuantities(addQuantities(address.weekA, address.weekB), address.weekA);
+      else result = addQuantities(addQuantities(address.weekB, address.weekA), address.weekB);
+      if (isFirstMonth) result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
     }
-
     return result;
   };
 
   // ============================================================================
-  // CALCULATE ALL ADDRESSES
+  // CALCULATE ALL ADDRESSES (skips held addresses)
   // ============================================================================
 
   const calculateAllAddresses = () => {
     if (!selectedDate || !detectedWeekType) return;
-
     const calculated = {};
     let totalChicken = 0, totalMeat = 0, totalPies = 0;
-
     Object.keys(addresses).forEach((key) => {
       const address = addresses[key];
+      if (isOnHold(address, selectedDate)) return; // skip held
       const quantities = combineRules(address, detectedWeekType, deliveryType, detectedFirstOfMonth);
-      
       calculated[key] = {
         ...quantities,
         notes: address.notes || '',
         fullAddress: address.fullAddress,
         postcode: address.postcode
       };
-
       totalChicken += quantities.chicken;
       totalMeat += quantities.meat;
       totalPies += quantities.pies;
     });
-
     setCalculatedAddresses(calculated);
-
-    // Generate butcher email from the customisable template
     const emailContent = butcherEmailTemplate
       .replace(/{DATE}/g, formatUKDate(selectedDate))
       .replace(/{CHICKEN}/g, totalChicken)
       .replace(/{MEAT}/g, totalMeat)
       .replace(/{PIES}/g, totalPies);
-
     setEmailTemplate(emailContent);
   };
 
   useEffect(() => {
     calculateAllAddresses();
-  }, [selectedDate, deliveryType, detectedWeekType, addresses]);
+  }, [selectedDate, deliveryType, detectedWeekType, detectedFirstOfMonth, addresses]);
 
   // ============================================================================
-  // HTML TABLE GENERATION WITH NOTES
+  // HTML TABLE GENERATION
   // ============================================================================
 
   const generateHTMLTable = () => {
-    const driverName = "DRIVER_NAME"; // Will be replaced when sent to specific driver
+    const driverName = "DRIVER_NAME";
     const dateStr = selectedDate || new Date().toISOString().split('T')[0];
-    const weekLabel = detectedWeekType + (detectedFirstOfMonth ? ' + First of Month' : '');
     const addresses_array = Object.entries(calculatedAddresses);
-
     const headerText = deliveryMessage
       .replace(/{DRIVER}/g, driverName)
       .replace(/{DATE}/g, formatUKDate(dateStr))
       .replace(/{STOPS}/g, addresses_array.length);
-
-    const headerHTML = headerText
-      .split('\n')
-      .map(line => `<p style="margin: 5px 0; color: #333; font-weight: bold;">${line}</p>`)
-      .join('');
-
+    const headerHTML = headerText.split('\n').map(line => `<p style="margin: 5px 0; color: #333; font-weight: bold;">${line}</p>`).join('');
     const html = `
 <div style="font-family: Arial, sans-serif; padding: 20px; background: white; max-width: 600px;">
   ${headerHTML}
-  
   <hr style="border: none; border-top: 2px solid #ddd; margin: 15px 0;">
-  
   <table style="width: 100%; border-collapse: collapse;">
     <tr style="background: #f0f0f0;">
       <th style="padding: 10px; text-align: left; border-right: 1px solid #ddd; border-bottom: 2px solid #333;">Address</th>
@@ -350,9 +331,7 @@ export default function CharityDeliverySystem() {
     </tr>
     ${addresses_array.map(([key, addr]) => `
     <tr style="border-bottom: 1px solid #ddd;">
-      <td style="padding: 10px; border-right: 1px solid #ddd;">
-        <strong style="color: #333;">${addr.fullAddress}</strong>
-      </td>
+      <td style="padding: 10px; border-right: 1px solid #ddd;"><strong style="color: #333;">${addr.fullAddress}</strong></td>
       <td style="padding: 10px; text-align: center; border-right: 1px solid #ddd; font-weight: bold;">${addr.chicken}</td>
       <td style="padding: 10px; text-align: center; border-right: 1px solid #ddd; font-weight: bold;">${addr.meat}</td>
       <td style="padding: 10px; text-align: center; border-right: 1px solid #ddd; font-weight: bold;">${addr.pies}</td>
@@ -360,27 +339,99 @@ export default function CharityDeliverySystem() {
     </tr>
     `).join('')}
   </table>
-  
   <hr style="border: none; border-top: 2px solid #ddd; margin: 15px 0;">
   <p style="text-align: center; color: #666; font-size: 12px;">Professional Delivery Coordination</p>
 </div>
     `;
-
     return html;
   };
 
   // ============================================================================
-  // ADDRESS MANAGEMENT
+  // GEOCODING (postcodes.io - free UK postcode lookup)
   // ============================================================================
 
-  const addOrUpdateAddress = () => {
+  const geocodePostcode = async (postcode) => {
+    if (!postcode) return null;
+    try {
+      const clean = postcode.trim().replace(/\s+/g, '');
+      const resp = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(clean)}`);
+      if (!resp.ok) return null;
+      const json = await resp.json();
+      if (json && json.result && typeof json.result.latitude === 'number') {
+        return { lat: json.result.latitude, lng: json.result.longitude };
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // ============================================================================
+  // ADDRESS MANAGEMENT (with edit, geocode, hold)
+  // ============================================================================
+
+  const startAddAddress = () => {
+    setEditingAddress({ originalKey: null, hold: { type: 'none', from: '', to: '' } });
+    setShowAddAddress(true);
+  };
+
+  const startEditAddress = (key) => {
+    const a = addresses[key];
+    setEditingAddress({
+      originalKey: key,
+      fullAddress: a.fullAddress,
+      postcode: a.postcode,
+      weekAChicken: a.weekA?.chicken || 0,
+      weekAMeat: a.weekA?.meat || 0,
+      weekAPies: a.weekA?.pies || 0,
+      weekBChicken: a.weekB?.chicken || 0,
+      weekBMeat: a.weekB?.meat || 0,
+      weekBPies: a.weekB?.pies || 0,
+      firstOfMonthChicken: a.firstOfMonth?.chicken || 0,
+      firstOfMonthMeat: a.firstOfMonth?.meat || 0,
+      firstOfMonthPies: a.firstOfMonth?.pies || 0,
+      name: a.name || '',
+      adults: a.adults || 0,
+      children: a.children || 0,
+      notes: a.notes || '',
+      lat: a.lat != null ? a.lat : '',
+      lng: a.lng != null ? a.lng : '',
+      hold: a.hold || { type: 'none', from: '', to: '' }
+    });
+    setShowAddAddress(true);
+  };
+
+  const addOrUpdateAddress = async () => {
     if (!editingAddress?.fullAddress || !editingAddress?.postcode) {
       alert('Please fill in address and postcode');
       return;
     }
-
     const key = editingAddress.fullAddress;
-    
+
+    // Determine coordinates: use manual if provided, else geocode
+    let lat = editingAddress.lat;
+    let lng = editingAddress.lng;
+    let needsLocation = false;
+
+    const hasManual = (lat !== '' && lat != null && !isNaN(parseFloat(lat)) && lng !== '' && lng != null && !isNaN(parseFloat(lng)));
+
+    if (hasManual) {
+      lat = parseFloat(lat);
+      lng = parseFloat(lng);
+    } else {
+      setGeocoding(true);
+      const coords = await geocodePostcode(editingAddress.postcode);
+      setGeocoding(false);
+      if (coords) {
+        lat = coords.lat;
+        lng = coords.lng;
+      } else {
+        lat = null;
+        lng = null;
+        needsLocation = true;
+      }
+    }
+
     const newAddress = {
       fullAddress: editingAddress.fullAddress,
       postcode: editingAddress.postcode,
@@ -399,16 +450,27 @@ export default function CharityDeliverySystem() {
         meat: parseInt(editingAddress.firstOfMonthMeat) || 0,
         pies: parseInt(editingAddress.firstOfMonthPies) || 0
       },
-      name: editingAddress.name,
+      name: editingAddress.name || '',
       adults: parseInt(editingAddress.adults) || 0,
       children: parseInt(editingAddress.children) || 0,
-      notes: editingAddress.notes
+      notes: editingAddress.notes || '',
+      lat: lat,
+      lng: lng,
+      needsLocation: needsLocation,
+      hold: editingAddress.hold || { type: 'none', from: '', to: '' }
     };
 
-    setAddresses({
-      ...addresses,
-      [key]: newAddress
-    });
+    const newAddresses = { ...addresses };
+    // If editing and the address text changed, remove the old key
+    if (editingAddress.originalKey && editingAddress.originalKey !== key) {
+      delete newAddresses[editingAddress.originalKey];
+    }
+    newAddresses[key] = newAddress;
+    setAddresses(newAddresses);
+
+    if (needsLocation) {
+      alert('Saved, but the postcode could not be located automatically. You can add coordinates manually by editing this address (right-click the spot in Google Maps to get lat/lng).');
+    }
 
     setEditingAddress(null);
     setShowAddAddress(false);
@@ -422,43 +484,75 @@ export default function CharityDeliverySystem() {
     }
   };
 
+  // Re-geocode a single address that needs location
+  const locateAddress = async (key) => {
+    const a = addresses[key];
+    setGeocoding(true);
+    const coords = await geocodePostcode(a.postcode);
+    setGeocoding(false);
+    if (coords) {
+      setAddresses({ ...addresses, [key]: { ...a, lat: coords.lat, lng: coords.lng, needsLocation: false } });
+    } else {
+      alert('Still could not locate this postcode. Please edit the address and enter coordinates manually.');
+    }
+  };
+
   // ============================================================================
-  // DRIVER MANAGEMENT
+  // DRIVER MANAGEMENT (with edit)
   // ============================================================================
+
+  const startAddDriver = () => {
+    setEditingDriverOriginal(null);
+    setEditingDriverName('');
+    setEditingDriverPhone('');
+    setShowAddDriver(true);
+  };
+
+  const startEditDriver = (name) => {
+    setEditingDriverOriginal(name);
+    setEditingDriverName(name);
+    setEditingDriverPhone(driverPhones[name] || '');
+    setShowAddDriver(true);
+  };
 
   const addOrUpdateDriver = () => {
     if (!editingDriverName.trim()) {
       alert('Please enter a driver name');
       return;
     }
-
     const name = editingDriverName.trim();
-
-    setDrivers({ ...drivers, [name]: true });
-    setDriverPhones({ ...driverPhones, [name]: editingDriverPhone.trim() });
-
+    const newDrivers = { ...drivers };
+    const newPhones = { ...driverPhones };
+    // If renaming, remove the old entry
+    if (editingDriverOriginal && editingDriverOriginal !== name) {
+      delete newDrivers[editingDriverOriginal];
+      delete newPhones[editingDriverOriginal];
+    }
+    newDrivers[name] = true;
+    newPhones[name] = editingDriverPhone.trim();
+    setDrivers(newDrivers);
+    setDriverPhones(newPhones);
     setEditingDriverName('');
     setEditingDriverPhone('');
+    setEditingDriverOriginal(null);
     setShowAddDriver(false);
   };
 
- const deleteDriver = (name) => {
+  const deleteDriver = (name) => {
     if (window.confirm(`Delete driver ${name}?`)) {
       const newDrivers = { ...drivers };
       delete newDrivers[name];
       setDrivers(newDrivers);
-
       const newPhones = { ...driverPhones };
       delete newPhones[name];
       setDriverPhones(newPhones);
     }
   };
-  
-// ============================================================================
-  // POLL VOTING (public, privacy-preserving)
+
+  // ============================================================================
+  // POLL VOTING
   // ============================================================================
 
-  // Normalise a phone number: strip everything non-digit, drop leading 44 or 0
   const normalisePhone = (phone) => {
     let digits = (phone || '').replace(/\D/g, '');
     if (digits.startsWith('44')) digits = digits.slice(2);
@@ -466,7 +560,6 @@ export default function CharityDeliverySystem() {
     return digits;
   };
 
-  // Simple deterministic fingerprint of a normalised phone (not reversible to the number)
   const hashPhone = (phone) => {
     const normalised = normalisePhone(phone);
     let hash = 5381;
@@ -485,27 +578,17 @@ export default function CharityDeliverySystem() {
       alert('Add at least one driver first.');
       return;
     }
-
-    // Build a roster of hashed phone -> name. No real numbers leave your private data.
     const roster = {};
     let missingPhone = false;
     Object.keys(drivers).forEach((name) => {
       const phone = driverPhones[name];
-      if (!phone || !normalisePhone(phone)) {
-        missingPhone = true;
-        return;
-      }
+      if (!phone || !normalisePhone(phone)) { missingPhone = true; return; }
       roster[hashPhone(phone)] = name;
     });
-
     if (missingPhone) {
-      if (!window.confirm('Some drivers have no phone number and will not be able to vote. Continue anyway?')) {
-        return;
-      }
+      if (!window.confirm('Some drivers have no phone number and will not be able to vote. Continue anyway?')) return;
     }
-
     const pollId = `${selectedDate}-${Date.now().toString(36)}`;
-
     set(ref(db, `polls/${pollId}`), {
       date: selectedDate,
       createdAt: new Date().toISOString(),
@@ -517,30 +600,19 @@ export default function CharityDeliverySystem() {
       alert('Could not open poll: ' + err.message);
     });
   };
-  
+
   // ============================================================================
   // BACKUP / EXPORT
   // ============================================================================
 
   const exportData = () => {
     const dataToExport = {
-      addresses,
-      drivers,
-      driverPhones,
-      driverPreferences,
-      anchorDate,
-      anchorWeek,
-      anchorFirstOfMonth,
-      pollMessage,
-      deliveryMessage,
-      butcherEmailTemplate,
-      cutoffDay,
-      cutoffHour,
-      cutoffMinute,
-      forceUKTime,
+      addresses, drivers, driverPhones, driverPreferences,
+      anchorDate, anchorWeek, anchorFirstOfMonth,
+      pollMessage, deliveryMessage, butcherEmailTemplate,
+      cutoffDay, cutoffHour, cutoffMinute, forceUKTime,
       exportedAt: new Date().toISOString()
     };
-
     const dataStr = JSON.stringify(dataToExport, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -552,7 +624,7 @@ export default function CharityDeliverySystem() {
   };
 
   // ============================================================================
-  // UI COMPONENTS
+  // RENDER
   // ============================================================================
 
   if (loading) {
@@ -564,70 +636,45 @@ export default function CharityDeliverySystem() {
       <div style={{ padding: '40px', maxWidth: '400px', margin: '0 auto' }}>
         <h1>🍽️ Charity Delivery Coordinator</h1>
         <p>Admin Access Only</p>
-        
         {authError && <div style={{ color: 'red', marginBottom: '10px' }}>{authError}</div>}
-        
-        <input
-          type="email"
-          placeholder="Email"
-          value={loginEmail}
+        <input type="email" placeholder="Email" value={loginEmail}
           onChange={(e) => setLoginEmail(e.target.value)}
-          style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
-        />
-        
-        <input
-          type="password"
-          placeholder="Password"
-          value={loginPassword}
+          style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
+        <input type="password" placeholder="Password" value={loginPassword}
           onChange={(e) => setLoginPassword(e.target.value)}
-          style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
-        />
-        
+          style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
         <button
           onClick={() => {
             signInWithEmailAndPassword(auth, loginEmail, loginPassword)
               .catch((error) => setAuthError(error.message));
           }}
-          style={{ width: '100%', padding: '10px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}
-        >
+          style={{ width: '100%', padding: '10px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}>
           Login
         </button>
       </div>
     );
   }
 
-  // ============================================================================
-  // MAIN UI - TABS
-  // ============================================================================
-
   return (
     <div style={{ fontFamily: 'Arial, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h1>🍽️ Charity Delivery Coordinator</h1>
-        <button
-          onClick={() => signOut(auth)}
-          style={{ padding: '8px 16px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}
-        >
+        <button onClick={() => signOut(auth)}
+          style={{ padding: '8px 16px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>
           Logout
         </button>
       </div>
 
-      {/* TAB NAVIGATION */}
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '2px solid #ddd' }}>
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '2px solid #ddd', flexWrap: 'wrap' }}>
         {['setup', 'poll', 'summary', 'send', 'analytics', 'settings'].map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
+          <button key={tab} onClick={() => setActiveTab(tab)}
             style={{
               padding: '10px 20px',
               backgroundColor: activeTab === tab ? '#4CAF50' : '#f0f0f0',
               color: activeTab === tab ? 'white' : 'black',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: '14px',
+              border: 'none', cursor: 'pointer', fontSize: '14px',
               fontWeight: activeTab === tab ? 'bold' : 'normal'
-            }}
-          >
+            }}>
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
@@ -637,159 +684,123 @@ export default function CharityDeliverySystem() {
       {activeTab === 'setup' && (
         <div>
           <h2>📋 Setup</h2>
-          
           <h3>Addresses</h3>
-          <button onClick={() => setShowAddAddress(true)} style={{ padding: '8px 16px', marginBottom: '10px' }}>
+          <button onClick={startAddAddress} style={{ padding: '8px 16px', marginBottom: '10px' }}>
             ➕ Add Address
           </button>
 
           {showAddAddress && (
             <div style={{ border: '1px solid #ddd', padding: '15px', marginBottom: '15px' }}>
-              <h4>Add/Edit Address</h4>
-              
-              <input
-                type="text"
-                placeholder="Full Address"
+              <h4>{editingAddress?.originalKey ? 'Edit Address' : 'Add Address'}</h4>
+              <input type="text" placeholder="Full Address"
                 value={editingAddress?.fullAddress || ''}
                 onChange={(e) => setEditingAddress({ ...editingAddress, fullAddress: e.target.value })}
-                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
-              />
-
-              <input
-                type="text"
-                placeholder="Postcode"
+                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
+              <input type="text" placeholder="Postcode"
                 value={editingAddress?.postcode || ''}
                 onChange={(e) => setEditingAddress({ ...editingAddress, postcode: e.target.value })}
-                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
-              />
+                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-                <div>
-                  <label>Week A Chicken</label>
-                  <input
-                    type="number"
-                    value={editingAddress?.weekAChicken || 0}
-                    onChange={(e) => setEditingAddress({ ...editingAddress, weekAChicken: e.target.value })}
-                    style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-                  />
-                </div>
-                <div>
-                  <label>Week A Meat</label>
-                  <input
-                    type="number"
-                    value={editingAddress?.weekAMeat || 0}
-                    onChange={(e) => setEditingAddress({ ...editingAddress, weekAMeat: e.target.value })}
-                    style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-                  />
-                </div>
-                <div>
-                  <label>Week A Pies</label>
-                  <input
-                    type="number"
-                    value={editingAddress?.weekAPies || 0}
-                    onChange={(e) => setEditingAddress({ ...editingAddress, weekAPies: e.target.value })}
-                    style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-                  />
-                </div>
+                <div><label>Week A Chicken</label><input type="number" value={editingAddress?.weekAChicken || 0}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, weekAChicken: e.target.value })}
+                  style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
+                <div><label>Week A Meat</label><input type="number" value={editingAddress?.weekAMeat || 0}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, weekAMeat: e.target.value })}
+                  style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
+                <div><label>Week A Pies</label><input type="number" value={editingAddress?.weekAPies || 0}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, weekAPies: e.target.value })}
+                  style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-                <div>
-                  <label>Week B Chicken</label>
-                  <input
-                    type="number"
-                    value={editingAddress?.weekBChicken || 0}
-                    onChange={(e) => setEditingAddress({ ...editingAddress, weekBChicken: e.target.value })}
-                    style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-                  />
-                </div>
-                <div>
-                  <label>Week B Meat</label>
-                  <input
-                    type="number"
-                    value={editingAddress?.weekBMeat || 0}
-                    onChange={(e) => setEditingAddress({ ...editingAddress, weekBMeat: e.target.value })}
-                    style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-                  />
-                </div>
-                <div>
-                  <label>Week B Pies</label>
-                  <input
-                    type="number"
-                    value={editingAddress?.weekBPies || 0}
-                    onChange={(e) => setEditingAddress({ ...editingAddress, weekBPies: e.target.value })}
-                    style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-                  />
-                </div>
+                <div><label>Week B Chicken</label><input type="number" value={editingAddress?.weekBChicken || 0}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, weekBChicken: e.target.value })}
+                  style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
+                <div><label>Week B Meat</label><input type="number" value={editingAddress?.weekBMeat || 0}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, weekBMeat: e.target.value })}
+                  style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
+                <div><label>Week B Pies</label><input type="number" value={editingAddress?.weekBPies || 0}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, weekBPies: e.target.value })}
+                  style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-                <div>
-                  <label>First of Month Chicken</label>
-                  <input
-                    type="number"
-                    value={editingAddress?.firstOfMonthChicken || 0}
-                    onChange={(e) => setEditingAddress({ ...editingAddress, firstOfMonthChicken: e.target.value })}
-                    style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-                  />
-                </div>
-                <div>
-                  <label>First of Month Meat</label>
-                  <input
-                    type="number"
-                    value={editingAddress?.firstOfMonthMeat || 0}
-                    onChange={(e) => setEditingAddress({ ...editingAddress, firstOfMonthMeat: e.target.value })}
-                    style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-                  />
-                </div>
-                <div>
-                  <label>First of Month Pies</label>
-                  <input
-                    type="number"
-                    value={editingAddress?.firstOfMonthPies || 0}
-                    onChange={(e) => setEditingAddress({ ...editingAddress, firstOfMonthPies: e.target.value })}
-                    style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-                  />
-                </div>
+                <div><label>First of Month Chicken</label><input type="number" value={editingAddress?.firstOfMonthChicken || 0}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, firstOfMonthChicken: e.target.value })}
+                  style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
+                <div><label>First of Month Meat</label><input type="number" value={editingAddress?.firstOfMonthMeat || 0}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, firstOfMonthMeat: e.target.value })}
+                  style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
+                <div><label>First of Month Pies</label><input type="number" value={editingAddress?.firstOfMonthPies || 0}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, firstOfMonthPies: e.target.value })}
+                  style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
               </div>
 
-              <input
-                type="text"
-                placeholder="Name (admin only)"
+              <input type="text" placeholder="Name (admin only)"
                 value={editingAddress?.name || ''}
                 onChange={(e) => setEditingAddress({ ...editingAddress, name: e.target.value })}
-                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
-              />
+                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-                <input
-                  type="number"
-                  placeholder="Adults"
-                  value={editingAddress?.adults || 0}
+                <input type="number" placeholder="Adults" value={editingAddress?.adults || 0}
                   onChange={(e) => setEditingAddress({ ...editingAddress, adults: e.target.value })}
-                  style={{ padding: '8px', boxSizing: 'border-box' }}
-                />
-                <input
-                  type="number"
-                  placeholder="Children"
-                  value={editingAddress?.children || 0}
+                  style={{ padding: '8px', boxSizing: 'border-box' }} />
+                <input type="number" placeholder="Children" value={editingAddress?.children || 0}
                   onChange={(e) => setEditingAddress({ ...editingAddress, children: e.target.value })}
-                  style={{ padding: '8px', boxSizing: 'border-box' }}
-                />
+                  style={{ padding: '8px', boxSizing: 'border-box' }} />
               </div>
 
-              <textarea
-                placeholder="Notes (door codes, access info - shown to drivers)"
+              <textarea placeholder="Notes (door codes, access info - shown to drivers)"
                 value={editingAddress?.notes || ''}
                 onChange={(e) => setEditingAddress({ ...editingAddress, notes: e.target.value })}
-                style={{ width: '100%', padding: '8px', minHeight: '60px', marginBottom: '10px', boxSizing: 'border-box' }}
-              />
+                style={{ width: '100%', padding: '8px', minHeight: '60px', marginBottom: '10px', boxSizing: 'border-box' }} />
+
+              <div style={{ backgroundColor: '#f0f7ff', padding: '10px', borderRadius: '4px', marginBottom: '10px' }}>
+                <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#555' }}>
+                  <strong>Location (optional)</strong> — leave blank to auto-locate from postcode. Fill in only if auto-location fails.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <input type="text" placeholder="Latitude" value={editingAddress?.lat ?? ''}
+                    onChange={(e) => setEditingAddress({ ...editingAddress, lat: e.target.value })}
+                    style={{ padding: '8px', boxSizing: 'border-box' }} />
+                  <input type="text" placeholder="Longitude" value={editingAddress?.lng ?? ''}
+                    onChange={(e) => setEditingAddress({ ...editingAddress, lng: e.target.value })}
+                    style={{ padding: '8px', boxSizing: 'border-box' }} />
+                </div>
+              </div>
+
+              <div style={{ backgroundColor: '#fff8e1', padding: '10px', borderRadius: '4px', marginBottom: '10px' }}>
+                <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#555' }}><strong>On Hold</strong> — pause deliveries to this address.</p>
+                <select
+                  value={editingAddress?.hold?.type || 'none'}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, hold: { ...(editingAddress?.hold || {}), type: e.target.value } })}
+                  style={{ padding: '8px', marginBottom: '8px' }}>
+                  <option value="none">Not on hold</option>
+                  <option value="permanent">On hold (permanent, until I change it)</option>
+                  <option value="range">On hold between dates</option>
+                </select>
+                {editingAddress?.hold?.type === 'range' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div><label style={{ fontSize: '12px' }}>From</label>
+                      <input type="date" value={editingAddress?.hold?.from || ''}
+                        onChange={(e) => setEditingAddress({ ...editingAddress, hold: { ...editingAddress.hold, from: e.target.value } })}
+                        style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
+                    <div><label style={{ fontSize: '12px' }}>To</label>
+                      <input type="date" value={editingAddress?.hold?.to || ''}
+                        onChange={(e) => setEditingAddress({ ...editingAddress, hold: { ...editingAddress.hold, to: e.target.value } })}
+                        style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }} /></div>
+                  </div>
+                )}
+              </div>
 
               <div style={{ display: 'flex', gap: '10px' }}>
-                <button onClick={addOrUpdateAddress} style={{ padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}>
-                  Save Address
+                <button onClick={addOrUpdateAddress} disabled={geocoding}
+                  style={{ padding: '8px 16px', backgroundColor: geocoding ? '#999' : '#4CAF50', color: 'white', border: 'none', cursor: geocoding ? 'default' : 'pointer' }}>
+                  {geocoding ? 'Locating…' : 'Save Address'}
                 </button>
-                <button onClick={() => setShowAddAddress(false)} style={{ padding: '8px 16px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>
+                <button onClick={() => { setShowAddAddress(false); setEditingAddress(null); }}
+                  style={{ padding: '8px 16px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>
                   Cancel
                 </button>
               </div>
@@ -797,52 +808,48 @@ export default function CharityDeliverySystem() {
           )}
 
           <div style={{ marginTop: '15px' }}>
-            {Object.keys(addresses).map((key) => (
-              <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px' }}>
-                <strong>{addresses[key].fullAddress}</strong>
-                <p style={{ margin: '5px 0', fontSize: '12px' }}>
-                  W.A: {addresses[key].weekA.chicken} chicken, {addresses[key].weekA.meat} meat | 
-                  W.B: {addresses[key].weekB.chicken} chicken, {addresses[key].weekB.meat} meat
-                </p>
-                {addresses[key].notes && <p style={{ margin: '5px 0', fontSize: '11px', color: '#666' }}>📝 {addresses[key].notes}</p>}
-                <div>
-                  <button onClick={() => deleteAddress(key)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>
-                    Delete
-                  </button>
+            {Object.keys(addresses).map((key) => {
+              const a = addresses[key];
+              const held = isOnHold(a, selectedDate);
+              return (
+                <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: held ? '#fff3e0' : 'white' }}>
+                  <strong>{a.fullAddress}</strong>
+                  {a.needsLocation && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#e65100', fontWeight: 'bold' }}>⚠ needs location</span>}
+                  {a.hold && a.hold.type && a.hold.type !== 'none' && (
+                    <span style={{ marginLeft: '8px', fontSize: '11px', color: '#e65100', fontWeight: 'bold' }}>
+                      ⏸ on hold{a.hold.type === 'range' ? ` ${formatUKDate(a.hold.from)}–${formatUKDate(a.hold.to)}` : ' (permanent)'}
+                    </span>
+                  )}
+                  <p style={{ margin: '5px 0', fontSize: '12px' }}>
+                    W.A: {a.weekA.chicken} chicken, {a.weekA.meat} meat | W.B: {a.weekB.chicken} chicken, {a.weekB.meat} meat
+                  </p>
+                  {a.notes && <p style={{ margin: '5px 0', fontSize: '11px', color: '#666' }}>📝 {a.notes}</p>}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => startEditAddress(key)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>Edit</button>
+                    {a.needsLocation && <button onClick={() => locateAddress(key)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#FF9800', color: 'white', border: 'none', cursor: 'pointer' }}>Locate</button>}
+                    <button onClick={() => deleteAddress(key)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>Delete</button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <h3 style={{ marginTop: '30px' }}>Drivers</h3>
-          <button onClick={() => setShowAddDriver(true)} style={{ padding: '8px 16px', marginBottom: '10px' }}>
-            ➕ Add Driver
-          </button>
+          <button onClick={startAddDriver} style={{ padding: '8px 16px', marginBottom: '10px' }}>➕ Add Driver</button>
 
           {showAddDriver && (
             <div style={{ border: '1px solid #ddd', padding: '15px', marginBottom: '15px' }}>
-              <h4>Add Driver</h4>
-              <input
-                type="text"
-                placeholder="Driver Name"
-                value={editingDriverName}
+              <h4>{editingDriverOriginal ? 'Edit Driver' : 'Add Driver'}</h4>
+              <input type="text" placeholder="Driver Name" value={editingDriverName}
                 onChange={(e) => setEditingDriverName(e.target.value)}
-                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
-              />
-              <input
-                type="text"
-                placeholder="Phone (e.g. 07700 123456)"
-                value={editingDriverPhone}
+                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
+              <input type="text" placeholder="Phone (e.g. 07700 123456)" value={editingDriverPhone}
                 onChange={(e) => setEditingDriverPhone(e.target.value)}
-                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
-              />
+                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
               <div style={{ display: 'flex', gap: '10px' }}>
-                <button onClick={addOrUpdateDriver} style={{ padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}>
-                  Save Driver
-                </button>
-                <button onClick={() => { setShowAddDriver(false); setEditingDriverName(''); setEditingDriverPhone(''); }} style={{ padding: '8px 16px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>
-                  Cancel
-                </button>
+                <button onClick={addOrUpdateDriver} style={{ padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}>Save Driver</button>
+                <button onClick={() => { setShowAddDriver(false); setEditingDriverName(''); setEditingDriverPhone(''); setEditingDriverOriginal(null); }}
+                  style={{ padding: '8px 16px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>Cancel</button>
               </div>
             </div>
           )}
@@ -854,9 +861,10 @@ export default function CharityDeliverySystem() {
                   <strong>{name}</strong>
                   {driverPhones[name] && <span style={{ marginLeft: '10px', color: '#666', fontSize: '13px' }}>📞 {driverPhones[name]}</span>}
                 </div>
-                <button onClick={() => deleteDriver(name)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>
-                  Delete
-                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => startEditDriver(name)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>Edit</button>
+                  <button onClick={() => deleteDriver(name)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>Delete</button>
+                </div>
               </div>
             ))}
           </div>
@@ -867,15 +875,11 @@ export default function CharityDeliverySystem() {
       {activeTab === 'poll' && (
         <div>
           <h2>📋 Select Delivery Date</h2>
-
           <div style={{ marginBottom: '20px' }}>
             <label>Delivery Date:</label>
-            <input
-              type="date"
-              value={selectedDate || ''}
+            <input type="date" value={selectedDate || ''}
               onChange={(e) => handleDateSelection(e.target.value)}
-              style={{ padding: '8px', fontSize: '16px' }}
-            />
+              style={{ padding: '8px', fontSize: '16px' }} />
           </div>
 
           {selectedDate && (
@@ -883,37 +887,12 @@ export default function CharityDeliverySystem() {
               <div style={{ backgroundColor: '#e8f5e9', padding: '15px', marginBottom: '20px', borderRadius: '4px' }}>
                 <strong>Week Detected:</strong> {detectedWeekType}{detectedFirstOfMonth ? ' + First of Month' : ''}
               </div>
-
               <div style={{ marginBottom: '20px' }}>
                 <label>Delivery Type:</label>
                 <div>
-                  <label style={{ marginRight: '20px' }}>
-                    <input
-                      type="radio"
-                      value="single"
-                      checked={deliveryType === 'single'}
-                      onChange={(e) => setDeliveryType(e.target.value)}
-                    />
-                    Single
-                  </label>
-                  <label style={{ marginRight: '20px' }}>
-                    <input
-                      type="radio"
-                      value="double"
-                      checked={deliveryType === 'double'}
-                      onChange={(e) => setDeliveryType(e.target.value)}
-                    />
-                    Double
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      value="triple"
-                      checked={deliveryType === 'triple'}
-                      onChange={(e) => setDeliveryType(e.target.value)}
-                    />
-                    Triple
-                  </label>
+                  <label style={{ marginRight: '20px' }}><input type="radio" value="single" checked={deliveryType === 'single'} onChange={(e) => setDeliveryType(e.target.value)} /> Single</label>
+                  <label style={{ marginRight: '20px' }}><input type="radio" value="double" checked={deliveryType === 'double'} onChange={(e) => setDeliveryType(e.target.value)} /> Double</label>
+                  <label><input type="radio" value="triple" checked={deliveryType === 'triple'} onChange={(e) => setDeliveryType(e.target.value)} /> Triple</label>
                 </div>
               </div>
 
@@ -922,31 +901,22 @@ export default function CharityDeliverySystem() {
                 <p style={{ fontSize: '13px', color: '#666' }}>
                   Opens a poll for this date. Drivers confirm their mobile number, then vote. Phone numbers are stored only as a secure fingerprint, never in the open.
                 </p>
-                <button
-                  onClick={openPollForVoting}
-                  style={{ padding: '10px 20px', backgroundColor: '#FF9800', color: 'white', border: 'none', cursor: 'pointer' }}
-                >
+                <button onClick={openPollForVoting}
+                  style={{ padding: '10px 20px', backgroundColor: '#FF9800', color: 'white', border: 'none', cursor: 'pointer' }}>
                   📣 Open Poll for Voting
                 </button>
-
                 {activePollId && (
                   <div style={{ marginTop: '15px' }}>
                     <p style={{ margin: '5px 0', fontSize: '13px' }}><strong>Poll is live!</strong> Share this link with your drivers:</p>
-                    <input
-                      type="text"
-                      readOnly
-                      value={`${window.location.origin}/vote.html?poll=${activePollId}`}
+                    <input type="text" readOnly value={`${window.location.origin}/vote.html?poll=${activePollId}`}
                       style={{ width: '100%', padding: '8px', boxSizing: 'border-box', fontSize: '13px' }}
-                      onFocus={(e) => e.target.select()}
-                    />
-                    <button
-                      onClick={() => {
+                      onFocus={(e) => e.target.select()} />
+                    <button onClick={() => {
                         navigator.clipboard.writeText(`${window.location.origin}/vote.html?poll=${activePollId}`);
                         setCopiedMessage('Link copied!');
                         setTimeout(() => setCopiedMessage(''), 2000);
                       }}
-                      style={{ marginTop: '8px', padding: '8px 16px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}
-                    >
+                      style={{ marginTop: '8px', padding: '8px 16px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>
                       Copy Link
                     </button>
                     {copiedMessage && <span style={{ marginLeft: '10px', color: 'green' }}>{copiedMessage}</span>}
@@ -962,7 +932,6 @@ export default function CharityDeliverySystem() {
       {activeTab === 'summary' && (
         <div>
           <h2>📊 Summary</h2>
-
           {selectedDate ? (
             <>
               <div style={{ backgroundColor: '#f5f5f5', padding: '15px', marginBottom: '15px', borderRadius: '4px' }}>
@@ -970,7 +939,6 @@ export default function CharityDeliverySystem() {
                 <strong>Week:</strong> {detectedWeekType}{detectedFirstOfMonth ? ' + First of Month' : ''}<br />
                 <strong>Type:</strong> {deliveryType.charAt(0).toUpperCase() + deliveryType.slice(1)}
               </div>
-
               <h3>Addresses</h3>
               <div style={{ marginBottom: '20px' }}>
                 {Object.keys(calculatedAddresses).map((key) => (
@@ -981,28 +949,20 @@ export default function CharityDeliverySystem() {
                   </div>
                 ))}
               </div>
-
               <h3>Butcher Email</h3>
-              <textarea
-                value={emailTemplate}
-                onChange={(e) => setEmailTemplate(e.target.value)}
-                style={{ width: '100%', minHeight: '200px', padding: '10px', fontFamily: 'monospace', boxSizing: 'border-box' }}
-              />
-              <button
-                onClick={() => {
+              <textarea value={emailTemplate} onChange={(e) => setEmailTemplate(e.target.value)}
+                style={{ width: '100%', minHeight: '200px', padding: '10px', fontFamily: 'monospace', boxSizing: 'border-box' }} />
+              <button onClick={() => {
                   navigator.clipboard.writeText(emailTemplate);
                   setCopiedMessage('Copied!');
                   setTimeout(() => setCopiedMessage(''), 2000);
                 }}
-                style={{ marginTop: '10px', padding: '8px 16px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}
-              >
+                style={{ marginTop: '10px', padding: '8px 16px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>
                 Copy Email
               </button>
               {copiedMessage && <span style={{ marginLeft: '10px', color: 'green' }}>{copiedMessage}</span>}
             </>
-          ) : (
-            <p>Select a delivery date in the Poll tab first.</p>
-          )}
+          ) : (<p>Select a delivery date in the Poll tab first.</p>)}
         </div>
       )}
 
@@ -1010,33 +970,23 @@ export default function CharityDeliverySystem() {
       {activeTab === 'send' && (
         <div>
           <h2>📤 Send Delivery Messages</h2>
-
           {selectedDate ? (
             <>
               <h3>WhatsApp Message Preview</h3>
-              <div
-                dangerouslySetInnerHTML={{ __html: generateHTMLTable() }}
-                style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '20px', backgroundColor: '#f9f9f9' }}
-              />
-
-              <button
-                onClick={() => {
+              <div dangerouslySetInnerHTML={{ __html: generateHTMLTable() }}
+                style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '20px', backgroundColor: '#f9f9f9' }} />
+              <button onClick={() => {
                   const html = generateHTMLTable();
                   const blob = new Blob([html], { type: 'text/html' });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a');
-                  a.href = url;
-                  a.download = 'delivery-list.html';
-                  a.click();
+                  a.href = url; a.download = 'delivery-list.html'; a.click();
                 }}
-                style={{ padding: '10px 20px', backgroundColor: '#25D366', color: 'white', border: 'none', cursor: 'pointer', marginRight: '10px' }}
-              >
+                style={{ padding: '10px 20px', backgroundColor: '#25D366', color: 'white', border: 'none', cursor: 'pointer', marginRight: '10px' }}>
                 Download Image
               </button>
             </>
-          ) : (
-            <p>Select a delivery date in the Poll tab first.</p>
-          )}
+          ) : (<p>Select a delivery date in the Poll tab first.</p>)}
         </div>
       )}
 
@@ -1044,84 +994,40 @@ export default function CharityDeliverySystem() {
       {activeTab === 'settings' && (
         <div>
           <h2>⚙️ Settings</h2>
-
           <h3>Anchor Date Configuration</h3>
           <div style={{ backgroundColor: '#f5f5f5', padding: '15px', borderRadius: '4px', marginBottom: '20px' }}>
             <label>Anchor Date (First Delivery):</label>
-            <input
-              type="date"
-              value={anchorDate}
-              onChange={(e) => setAnchorDate(e.target.value)}
-              style={{ padding: '8px', marginBottom: '10px' }}
-            />
-
+            <input type="date" value={anchorDate} onChange={(e) => setAnchorDate(e.target.value)} style={{ padding: '8px', marginBottom: '10px' }} />
             <div style={{ marginBottom: '10px' }}>
               <label>Anchor Week Type:</label>
               <div>
-                <label style={{ marginRight: '20px' }}>
-                  <input
-                    type="radio"
-                    value="A"
-                    checked={anchorWeek === 'A'}
-                    onChange={(e) => setAnchorWeek(e.target.value)}
-                  />
-                  Week A
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    value="B"
-                    checked={anchorWeek === 'B'}
-                    onChange={(e) => setAnchorWeek(e.target.value)}
-                  />
-                  Week B
-                </label>
+                <label style={{ marginRight: '20px' }}><input type="radio" value="A" checked={anchorWeek === 'A'} onChange={(e) => setAnchorWeek(e.target.value)} /> Week A</label>
+                <label><input type="radio" value="B" checked={anchorWeek === 'B'} onChange={(e) => setAnchorWeek(e.target.value)} /> Week B</label>
               </div>
             </div>
-
-            <label>
-              <input
-                type="checkbox"
-                checked={anchorFirstOfMonth}
-                onChange={(e) => setAnchorFirstOfMonth(e.target.checked)}
-              />
-              First of Month (applies first-of-month bonus)
-            </label>
-
+            <label><input type="checkbox" checked={anchorFirstOfMonth} onChange={(e) => setAnchorFirstOfMonth(e.target.checked)} /> First of Month (applies first-of-month bonus)</label>
             <div style={{ color: '#666', fontSize: '12px', marginTop: '10px' }}>
               <p>✅ Anchor date set: {anchorDate} (Week {anchorWeek})</p>
-              <p>System will auto-calculate all future week types based on this anchor.</p>
             </div>
           </div>
 
-         <h3>Messages</h3>
+          <h3>Messages</h3>
           <label>Poll Message:</label>
-          <textarea
-            value={pollMessage}
-            onChange={(e) => setPollMessage(e.target.value)}
+          <textarea value={pollMessage} onChange={(e) => setPollMessage(e.target.value)}
             style={{ width: '100%', minHeight: '80px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
-            placeholder="Hi! Are you available? Vote here: {LINK} Closes: {CUTOFF}"
-          />
-
+            placeholder="Hi! Are you available? Vote here: {LINK} Closes: {CUTOFF}" />
           <label>Delivery Message Header (sent to drivers):</label>
-          <textarea
-            value={deliveryMessage}
-            onChange={(e) => setDeliveryMessage(e.target.value)}
+          <textarea value={deliveryMessage} onChange={(e) => setDeliveryMessage(e.target.value)}
             style={{ width: '100%', minHeight: '80px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
-            placeholder="📦 DELIVERY LIST FOR {DRIVER} ..."
-          />
+            placeholder="📦 DELIVERY LIST FOR {DRIVER} ..." />
           <p style={{ fontSize: '12px', color: '#666', marginTop: '-5px', marginBottom: '15px' }}>
             Use {'{DRIVER}'}, {'{DATE}'}, and {'{STOPS}'} as placeholders.
           </p>
-
           <label>Butcher Email Template:</label>
-          <textarea
-            value={butcherEmailTemplate}
-            onChange={(e) => setButcherEmailTemplate(e.target.value)}
+          <textarea value={butcherEmailTemplate} onChange={(e) => setButcherEmailTemplate(e.target.value)}
             style={{ width: '100%', minHeight: '120px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
-            placeholder="Hi, please prepare ..."
-          />
-        <p style={{ fontSize: '12px', color: '#666', marginTop: '-5px', marginBottom: '15px' }}>
+            placeholder="Hi, please prepare ..." />
+          <p style={{ fontSize: '12px', color: '#666', marginTop: '-5px', marginBottom: '15px' }}>
             Use {'{DATE}'}, {'{CHICKEN}'}, {'{MEAT}'}, and {'{PIES}'} as placeholders.
           </p>
 
@@ -1131,26 +1037,18 @@ export default function CharityDeliverySystem() {
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
               <label>Day:
                 <select value={cutoffDay} onChange={(e) => setCutoffDay(e.target.value)} style={{ padding: '8px', marginLeft: '5px' }}>
-                  <option value="monday">Monday</option>
-                  <option value="tuesday">Tuesday</option>
-                  <option value="wednesday">Wednesday</option>
-                  <option value="thursday">Thursday</option>
-                  <option value="friday">Friday</option>
-                  <option value="saturday">Saturday</option>
-                  <option value="sunday">Sunday</option>
+                  <option value="monday">Monday</option><option value="tuesday">Tuesday</option>
+                  <option value="wednesday">Wednesday</option><option value="thursday">Thursday</option>
+                  <option value="friday">Friday</option><option value="saturday">Saturday</option><option value="sunday">Sunday</option>
                 </select>
               </label>
               <label>Time:
                 <select value={cutoffHour} onChange={(e) => setCutoffHour(e.target.value)} style={{ padding: '8px', marginLeft: '5px' }}>
-                  {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
-                    <option key={h} value={h}>{h}</option>
-                  ))}
+                  {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (<option key={h} value={h}>{h}</option>))}
                 </select>
                 <span style={{ margin: '0 5px' }}>:</span>
                 <select value={cutoffMinute} onChange={(e) => setCutoffMinute(e.target.value)} style={{ padding: '8px' }}>
-                  {['00', '15', '30', '45'].map(m => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
+                  {['00', '15', '30', '45'].map(m => (<option key={m} value={m}>{m}</option>))}
                 </select>
               </label>
             </div>
@@ -1158,14 +1056,7 @@ export default function CharityDeliverySystem() {
 
           <h3>Timezone</h3>
           <div style={{ backgroundColor: '#f5f5f5', padding: '15px', borderRadius: '4px', marginBottom: '20px' }}>
-            <label>
-              <input
-                type="checkbox"
-                checked={forceUKTime}
-                onChange={(e) => setForceUKTime(e.target.checked)}
-              />
-              {' '}Force UK time (keeps cutoff in UK time even when you're abroad)
-            </label>
+            <label><input type="checkbox" checked={forceUKTime} onChange={(e) => setForceUKTime(e.target.checked)} /> Force UK time (keeps cutoff in UK time even when you're abroad)</label>
           </div>
         </div>
       )}
@@ -1174,24 +1065,17 @@ export default function CharityDeliverySystem() {
       {activeTab === 'analytics' && (
         <div>
           <h2>📊 Analytics & Backup</h2>
-
           <h3>Backup Your Data</h3>
           <div style={{ backgroundColor: '#f5f5f5', padding: '15px', borderRadius: '4px', marginBottom: '20px' }}>
             <p style={{ marginTop: 0, fontSize: '13px', color: '#666' }}>
               Download all your data (addresses, drivers, settings, templates) as a file you can keep safe.
             </p>
-            <button
-              onClick={exportData}
-              style={{ padding: '10px 20px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}
-            >
+            <button onClick={exportData} style={{ padding: '10px 20px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>
               📥 Download Backup
             </button>
           </div>
-
           <h3>Delivery Analytics</h3>
-          <p style={{ fontSize: '13px', color: '#666' }}>
-            Delivery tracking will appear here once driver allocation is set up.
-          </p>
+          <p style={{ fontSize: '13px', color: '#666' }}>Delivery tracking will appear here once driver allocation is set up.</p>
         </div>
       )}
     </div>
