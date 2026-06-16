@@ -769,126 +769,147 @@ export default function CharityDeliverySystem() {
       return;
     }
     const keys = Object.keys(calculatedAddresses);
+    
+    
+    
     const result = {};
     avail.forEach(d => { result[d] = []; });
     const unassigned = [];
 
-    const addrInfo = (key) => addresses[key] || {};
+    const addrInfo=(key)=>addresses[key]||{};
     const eligibleFor = (key) => {
       const avoid = (addrInfo(key).avoidDrivers) || [];
       return avail.filter(d => !avoid.includes(d));
     };
     const dist = (a, b) => { const dlat = a.lat - b.lat, dlng = a.lng - b.lng; return Math.sqrt(dlat*dlat + dlng*dlng); };
+    const centroid = (d) => {
+      const pts = result[d].map(k => addrInfo(k)).filter(a => typeof a.lat === 'number');
+      if (!pts.length) return null;
+      return { lat: pts.reduce((s,a)=>s+a.lat,0)/pts.length, lng: pts.reduce((s,a)=>s+a.lng,0)/pts.length };
+    };
 
-    // Step 1: lock in preferred-driver addresses
-    const locked = {};
-    const pool = [];
+    // Step 1: preferred drivers
+    let pool = [];
     keys.forEach(key => {
       const a = addrInfo(key);
       const elig = eligibleFor(key);
-      if (a.preferredDriver && elig.includes(a.preferredDriver)) locked[key] = a.preferredDriver;
+      if (a.preferredDriver && elig.includes(a.preferredDriver)) result[a.preferredDriver].push(key);
       else pool.push(key);
     });
 
     const withCoords = pool.filter(k => typeof addrInfo(k).lat === 'number');
     const noCoords = pool.filter(k => typeof addrInfo(k).lat !== 'number');
-    const n = withCoords.length;
-    const k = avail.length;
-    const capacity = Math.ceil(keys.length / k);
+    const target = Math.ceil(keys.length / avail.length);
 
-    // Step 2: initialise k spread-out centres (k-means++ style)
-    let centres = [];
-    if (n > 0) {
+    // Step 2: seed geographically separated starting points (one per driver)
+    const seeds = [];
+    if (withCoords.length > 0) {
       const gc = {
-        lat: withCoords.reduce((s,x)=>s+addrInfo(x).lat,0)/n,
-        lng: withCoords.reduce((s,x)=>s+addrInfo(x).lng,0)/n
+        lat: withCoords.reduce((s,k)=>s+addrInfo(k).lat,0)/withCoords.length,
+        lng: withCoords.reduce((s,k)=>s+addrInfo(k).lng,0)/withCoords.length
       };
-      let f = withCoords.reduce((b,x)=> dist(addrInfo(x),gc) > dist(addrInfo(b),gc) ? x : b, withCoords[0]);
-      centres.push({ ...addrInfo(f) });
-      while (centres.length < k) {
-        let next = null, bestD = -1;
-        withCoords.forEach(x => {
-          const md = Math.min(...centres.map(c => dist(addrInfo(x), c)));
-          if (md > bestD) { bestD = md; next = x; }
+      let first = withCoords.reduce((best,k)=> dist(addrInfo(k),gc) > dist(addrInfo(best),gc) ? k : best, withCoords[0]);
+      seeds.push(first);
+      while (seeds.length < avail.length && seeds.length < withCoords.length) {
+        let next = null, bestMinDist = -1;
+        withCoords.forEach(k => {
+          if (seeds.includes(k)) return;
+          const md = Math.min(...seeds.map(s => dist(addrInfo(k), addrInfo(s))));
+          if (md > bestMinDist) { bestMinDist = md; next = k; }
         });
-        centres.push(next ? { ...addrInfo(next) } : { ...centres[0] });
+        if (next) seeds.push(next); else break;
       }
-    } else {
-      for (let i = 0; i < k; i++) centres.push({ lat: 0, lng: 0 });
     }
 
-    // Step 3: iterate balanced assignment
-    let assignment = {};
-    for (let iter = 0; iter < 12; iter++) {
-      const counts = new Array(k).fill(0);
-      assignment = {};
-      const order = withCoords.slice().sort((x,y) => {
-        const dx = Math.min(...centres.map(c => dist(addrInfo(x), c)));
-        const dy = Math.min(...centres.map(c => dist(addrInfo(y), c)));
-        return dx - dy;
-      });
-      order.forEach(key => {
-        const ranked = centres.map((c, idx) => ({ idx, d: dist(addrInfo(key), c) })).sort((p,q) => p.d - q.d);
-        let chosen = ranked.find(r => counts[r.idx] < capacity);
-        if (!chosen) chosen = ranked[0];
-        assignment[key] = chosen.idx;
-        counts[chosen.idx]++;
-      });
-      const newCentres = centres.map((c, idx) => {
-        const members = withCoords.filter(key => assignment[key] === idx).map(key => addrInfo(key));
-        if (members.length === 0) return c;
-        return { lat: members.reduce((s,m)=>s+m.lat,0)/members.length, lng: members.reduce((s,m)=>s+m.lng,0)/members.length };
-      });
-      let moved = 0; newCentres.forEach((c, idx) => moved += dist(c, centres[idx]));
-      centres = newCentres;
-      if (moved < 1e-7) break;
-    }
-
-    // Step 4: map centres to drivers (honour avoid as best as possible)
-    const centreMembers = {};
-    for (let idx = 0; idx < k; idx++) centreMembers[idx] = withCoords.filter(key => assignment[key] === idx);
+    // assign seeds to eligible drivers (distinct where possible)
     const usedDrivers = new Set();
-    const centreToDriver = {};
-    Object.keys(centreMembers).sort((a,b) => centreMembers[b].length - centreMembers[a].length).forEach(idxStr => {
-      const idx = +idxStr;
-      const members = centreMembers[idx];
-      let best = null, bestOk = -1;
-      avail.forEach(d => {
-        if (usedDrivers.has(d)) return;
-        const ok = members.filter(key => !((addrInfo(key).avoidDrivers) || []).includes(d)).length;
-        if (ok > bestOk) { bestOk = ok; best = d; }
+    seeds.forEach(seedKey => {
+      const elig = eligibleFor(seedKey).filter(d => !usedDrivers.has(d));
+      const d = elig[0] || eligibleFor(seedKey)[0];
+      if (d) { result[d].push(seedKey); usedDrivers.add(d); }
+      else unassigned.push(seedKey);
+    });
+
+    // Step 3: grow clusters - assign remaining to nearest eligible driver under target
+    const remaining = withCoords.filter(k => !seeds.includes(k));
+    remaining.sort((k1,k2) => {
+      const d1 = Math.min(...avail.map(d => { const c = centroid(d); return c ? dist(addrInfo(k1),c) : 1e9; }));
+      const d2 = Math.min(...avail.map(d => { const c = centroid(d); return c ? dist(addrInfo(k2),c) : 1e9; }));
+      return d1 - d2;
+    });
+    remaining.forEach(key => {
+      const a = addrInfo(key);
+      const elig = eligibleFor(key);
+      if (elig.length === 0) { unassigned.push(key); return; }
+      const under = elig.filter(d => result[d].length < target);
+      const pick = (under.length ? under : elig);
+      pick.sort((d1,d2) => {
+        const c1 = centroid(d1), c2 = centroid(d2);
+        const dd1 = c1 ? dist(a,c1) : 1e9, dd2 = c2 ? dist(a,c2) : 1e9;
+        if (dd1 !== dd2) return dd1 - dd2;
+        return result[d1].length - result[d2].length;
       });
-      if (best) { centreToDriver[idx] = best; usedDrivers.add(best); }
+      result[pick[0]].push(key);
     });
 
-    // Step 5: assign members to their centre's driver, respecting avoid
-    withCoords.forEach(key => {
-      const idx = assignment[key];
-      let driver = centreToDriver[idx];
-      if (driver && ((addrInfo(key).avoidDrivers) || []).includes(driver)) driver = null;
-      if (!driver) {
-        const elig = eligibleFor(key);
-        if (elig.length === 0) { unassigned.push(key); return; }
-        driver = elig.reduce((b,d) => result[d].length < result[b].length ? d : b, elig[0]);
-      }
-      result[driver].push(key);
-    });
-
-    // preferred locked
-    Object.keys(locked).forEach(key => { result[locked[key]].push(key); });
-
-    // no-coords: pure balance
+    // Step 4: addresses without coordinates - pure balance
     noCoords.forEach(key => {
       const elig = eligibleFor(key);
       if (elig.length === 0) { unassigned.push(key); return; }
-      const driver = elig.reduce((b,d) => result[d].length < result[b].length ? d : b, elig[0]);
-      result[driver].push(key);
+      const minCount = Math.min(...elig.map(d => result[d].length));
+      result[elig.find(d => result[d].length === minCount)].push(key);
     });
+
+    // FINAL REBALANCE: even out counts to spread <= 1 without breaking avoid/preferred.
+    // Preferred-locked addresses must stay; we only move non-preferred ones.
+    const isLocked = (key) => {
+      const a = addrInfo(key);
+      return a.preferredDriver && avail.includes(a.preferredDriver);
+    };
+    const dist2 = (a,b) => { const dl=a.lat-b.lat, dn=a.lng-b.lng; return Math.sqrt(dl*dl+dn*dn); };
+    const cent = (d) => {
+      const pts = result[d].map(k=>addrInfo(k)).filter(a=>typeof a.lat==='number');
+      if(!pts.length) return null;
+      return {lat:pts.reduce((s,a)=>s+a.lat,0)/pts.length, lng:pts.reduce((s,a)=>s+a.lng,0)/pts.length};
+    };
+    let rbGuard = 0;
+    while (rbGuard++ < 500) {
+      let maxD = avail[0], minD = avail[0];
+      avail.forEach(d => { if(result[d].length>result[maxD].length)maxD=d; if(result[d].length<result[minD].length)minD=d; });
+      if (result[maxD].length - result[minD].length <= 1) break;
+      const minC = cent(minD);
+      // candidate movable addresses on maxD: not preferred-locked, not avoiding minD
+      let bestKey=null, bestDist=Infinity;
+      result[maxD].forEach(key => {
+        if (isLocked(key)) return;
+        if (((addrInfo(key).avoidDrivers)||[]).includes(minD)) return;
+        const a = addrInfo(key);
+        const dd = (minC && typeof a.lat==='number') ? dist2(a, minC) : 0;
+        if (dd < bestDist) { bestDist = dd; bestKey = key; }
+      });
+      if (!bestKey) {
+        // maxD has nothing movable to minD; try any over-loaded driver -> minD
+        let moved = false;
+        const overs = avail.slice().sort((a,b)=>result[b].length-result[a].length);
+        for (const od of overs) {
+          if (result[od].length - result[minD].length <= 1) break;
+          const cand = result[od].find(key => !isLocked(key) && !((addrInfo(key).avoidDrivers)||[]).includes(minD));
+          if (cand) { result[od]=result[od].filter(x=>x!==cand); result[minD].push(cand); moved=true; break; }
+        }
+        if (!moved) break;
+        continue;
+      }
+      result[maxD] = result[maxD].filter(x=>x!==bestKey);
+      result[minD].push(bestKey);
+    }
 
     if (unassigned.length > 0) result.__unassigned = unassigned;
     setProposedAllocation(result);
     setAllocationApproved(false);
+    
   };
+
+
 
   // Move an address to a different driver (manual override in review)
   const reassignAddress = (key, toDriver) => {
