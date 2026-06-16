@@ -728,6 +728,16 @@ export default function CharityDeliverySystem() {
     const unsub = onValue(votesRef, (snap) => {
       const v = snap.val() || {};
       setPollVotes(v);
+      // Auto-apply each vote to the availability list so the boxes tick themselves.
+      setAvailableDrivers((prev) => {
+        const next = { ...prev };
+        Object.values(v).forEach((vote) => {
+          if (vote && vote.name) {
+            next[vote.name] = !!vote.available;
+          }
+        });
+        return next;
+      });
     });
     return () => unsub();
   }, [activePollId]);
@@ -753,10 +763,9 @@ export default function CharityDeliverySystem() {
   const runAutoAllocation = () => {
     const avail = Object.keys(drivers).filter(d => availableDrivers[d]);
     if (avail.length === 0) {
-      alert('No drivers marked available. Tick at least one driver, or seed from the poll results.');
+      alert('No drivers marked available. Tick at least one driver, or load the poll results.');
       return;
     }
-    // Eligible addresses = the calculated ones for this date (already excludes held/excluded)
     const keys = Object.keys(calculatedAddresses);
     const result = {};
     avail.forEach(d => { result[d] = []; });
@@ -764,58 +773,89 @@ export default function CharityDeliverySystem() {
 
     const addrInfo = (key) => addresses[key] || {};
     const eligibleFor = (key) => {
-      const a = addrInfo(key);
-      const avoid = a.avoidDrivers || [];
+      const avoid = (addrInfo(key).avoidDrivers) || [];
       return avail.filter(d => !avoid.includes(d));
+    };
+    const dist = (a, b) => { const dlat = a.lat - b.lat, dlng = a.lng - b.lng; return Math.sqrt(dlat*dlat + dlng*dlng); };
+    const centroid = (d) => {
+      const pts = result[d].map(k => addrInfo(k)).filter(a => typeof a.lat === 'number');
+      if (!pts.length) return null;
+      return { lat: pts.reduce((s,a)=>s+a.lat,0)/pts.length, lng: pts.reduce((s,a)=>s+a.lng,0)/pts.length };
     };
 
     // Step 1: preferred drivers
-    const remaining = [];
+    let pool = [];
     keys.forEach(key => {
       const a = addrInfo(key);
       const elig = eligibleFor(key);
-      if (a.preferredDriver && elig.includes(a.preferredDriver)) {
-        result[a.preferredDriver].push(key);
-      } else {
-        remaining.push(key);
-      }
+      if (a.preferredDriver && elig.includes(a.preferredDriver)) result[a.preferredDriver].push(key);
+      else pool.push(key);
     });
 
-    const centroid = (driver) => {
-      const pts = result[driver].map(k => addrInfo(k)).filter(a => typeof a.lat === 'number');
-      if (pts.length === 0) return null;
-      return { lat: pts.reduce((s,a)=>s+a.lat,0)/pts.length, lng: pts.reduce((s,a)=>s+a.lng,0)/pts.length };
-    };
-    const dist = (a,b) => { if(!a||!b) return 0; const dlat=a.lat-b.lat, dlng=a.lng-b.lng; return Math.sqrt(dlat*dlat+dlng*dlng); };
+    const withCoords = pool.filter(k => typeof addrInfo(k).lat === 'number');
+    const noCoords = pool.filter(k => typeof addrInfo(k).lat !== 'number');
+    const target = Math.ceil(keys.length / avail.length);
 
-    // sort spatially
+    // Step 2: seed geographically separated starting points (one per driver)
+    const seeds = [];
+    if (withCoords.length > 0) {
+      const gc = {
+        lat: withCoords.reduce((s,k)=>s+addrInfo(k).lat,0)/withCoords.length,
+        lng: withCoords.reduce((s,k)=>s+addrInfo(k).lng,0)/withCoords.length
+      };
+      let first = withCoords.reduce((best,k)=> dist(addrInfo(k),gc) > dist(addrInfo(best),gc) ? k : best, withCoords[0]);
+      seeds.push(first);
+      while (seeds.length < avail.length && seeds.length < withCoords.length) {
+        let next = null, bestMinDist = -1;
+        withCoords.forEach(k => {
+          if (seeds.includes(k)) return;
+          const md = Math.min(...seeds.map(s => dist(addrInfo(k), addrInfo(s))));
+          if (md > bestMinDist) { bestMinDist = md; next = k; }
+        });
+        if (next) seeds.push(next); else break;
+      }
+    }
+
+    // assign seeds to eligible drivers (distinct where possible)
+    const usedDrivers = new Set();
+    seeds.forEach(seedKey => {
+      const elig = eligibleFor(seedKey).filter(d => !usedDrivers.has(d));
+      const d = elig[0] || eligibleFor(seedKey)[0];
+      if (d) { result[d].push(seedKey); usedDrivers.add(d); }
+      else unassigned.push(seedKey);
+    });
+
+    // Step 3: grow clusters - assign remaining to nearest eligible driver under target
+    const remaining = withCoords.filter(k => !seeds.includes(k));
     remaining.sort((k1,k2) => {
-      const a1=addrInfo(k1), a2=addrInfo(k2);
-      if (typeof a1.lat==='number' && typeof a2.lat==='number') {
-        if (a1.lat!==a2.lat) return a1.lat-a2.lat;
-        return (a1.lng||0)-(a2.lng||0);
-      }
-      return 0;
+      const d1 = Math.min(...avail.map(d => { const c = centroid(d); return c ? dist(addrInfo(k1),c) : 1e9; }));
+      const d2 = Math.min(...avail.map(d => { const c = centroid(d); return c ? dist(addrInfo(k2),c) : 1e9; }));
+      return d1 - d2;
     });
-
-    // Step 2: balance-by-count primary, nearness tie-break
     remaining.forEach(key => {
       const a = addrInfo(key);
       const elig = eligibleFor(key);
       if (elig.length === 0) { unassigned.push(key); return; }
-      const minCount = Math.min(...elig.map(d => result[d].length));
-      const candidates = elig.filter(d => result[d].length === minCount);
-      let best = candidates[0];
-      if (candidates.length > 1 && typeof a.lat === 'number') {
-        let bestDist = Infinity;
-        candidates.forEach(d => { const c = centroid(d); const dd = c ? dist(a,c) : 0; if (dd < bestDist) { bestDist=dd; best=d; } });
-      }
-      result[best].push(key);
+      const under = elig.filter(d => result[d].length < target);
+      const pick = (under.length ? under : elig);
+      pick.sort((d1,d2) => {
+        const c1 = centroid(d1), c2 = centroid(d2);
+        const dd1 = c1 ? dist(a,c1) : 1e9, dd2 = c2 ? dist(a,c2) : 1e9;
+        if (dd1 !== dd2) return dd1 - dd2;
+        return result[d1].length - result[d2].length;
+      });
+      result[pick[0]].push(key);
     });
 
-    if (unassigned.length > 0) {
-      result.__unassigned = unassigned;
-    }
+    // Step 4: addresses without coordinates - pure balance
+    noCoords.forEach(key => {
+      const elig = eligibleFor(key);
+      if (elig.length === 0) { unassigned.push(key); return; }
+      const minCount = Math.min(...elig.map(d => result[d].length));
+      result[elig.find(d => result[d].length === minCount)].push(key);
+    });
+
+    if (unassigned.length > 0) result.__unassigned = unassigned;
     setProposedAllocation(result);
     setAllocationApproved(false);
   };
