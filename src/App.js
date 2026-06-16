@@ -429,6 +429,7 @@ export default function CharityDeliverySystem() {
   const startAddAddress = () => {
     setEditingAddress({ originalKey: null, hold: { type: 'none', from: '', to: '' }, preferredDriver: '', avoidDrivers: [] });
     setShowAddAddress(true);
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
   };
 
   const startEditAddress = (key) => {
@@ -457,6 +458,7 @@ export default function CharityDeliverySystem() {
       avoidDrivers: a.avoidDrivers || []
     });
     setShowAddAddress(true);
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
   };
 
   const addOrUpdateAddress = async () => {
@@ -573,6 +575,7 @@ export default function CharityDeliverySystem() {
     setEditingDriverName(name);
     setEditingDriverPhone(driverPhones[name] || '');
     setShowAddDriver(true);
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
   };
 
   const addOrUpdateDriver = () => {
@@ -1295,6 +1298,8 @@ export default function CharityDeliverySystem() {
                     <strong>First of Month:</strong> {(a.firstOfMonth?.chicken) || 0}🍗 {(a.firstOfMonth?.meat) || 0}🍖 {(a.firstOfMonth?.pies) || 0}🥧
                   </p>
                   {a.notes && <p style={{ margin: '5px 0', fontSize: '11px', color: '#666' }}>📝 {a.notes}</p>}
+                  {a.preferredDriver && <p style={{ margin: '3px 0', fontSize: '11px', color: '#2e7d32' }}>⭐ Preferred: {a.preferredDriver}</p>}
+                  {a.avoidDrivers && a.avoidDrivers.length > 0 && <p style={{ margin: '3px 0', fontSize: '11px', color: '#c62828' }}>🚫 Avoid: {a.avoidDrivers.join(', ')}</p>}
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={() => startEditAddress(key)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>Edit</button>
                     {a.needsLocation && <button onClick={() => locateAddress(key)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#FF9800', color: 'white', border: 'none', cursor: 'pointer' }}>Locate</button>}
