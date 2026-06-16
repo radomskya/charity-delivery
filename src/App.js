@@ -84,8 +84,9 @@ export default function CharityDeliverySystem() {
   const [weekOverrides, setWeekOverrides] = useState({});
 
   // Message customization
-  const [pollMessage, setPollMessage] = useState('Hi! Quick question - are you available for delivery on {CUTOFF}? Vote here: {LINK}');
+  const [pollMessage, setPollMessage] = useState('Hi! Quick question - are you available for delivery on {DATE}? Please vote by {CUTOFF}: {LINK}');
   const [emailTemplate, setEmailTemplate] = useState('');
+  const [weekTotals, setWeekTotals] = useState({ chicken: 0, meat: 0, pies: 0 });
   const [deliveryMessage, setDeliveryMessage] = useState('📦 DELIVERY LIST FOR {DRIVER}\n📅 Week of: {DATE}\n🚗 Total stops: {STOPS}');
   const [butcherEmailTemplate, setButcherEmailTemplate] = useState('Hi,\n\nPlease prepare the following for collection on {DATE}:\n\n🍗 Chicken: {CHICKEN}\n🍖 Meat: {MEAT}\n🥧 Pies: {PIES}\n\nThank you!');
 
@@ -149,6 +150,7 @@ export default function CharityDeliverySystem() {
         setAllocationApproved(data.allocationApproved || false);
         setAvailableDrivers(data.availableDrivers || {});
         setWeekOverrides(data.weekOverrides || {});
+        setActivePollId(data.activePollId || '');
         // Restore the selected delivery date and recompute week type
         if (data.selectedDate) {
           setSelectedDate(data.selectedDate);
@@ -187,6 +189,7 @@ export default function CharityDeliverySystem() {
       allocationApproved,
       availableDrivers,
       weekOverrides,
+      activePollId: activePollId || null,
       selectedDate: selectedDate || null,
       deliveryType
     });
@@ -195,7 +198,7 @@ export default function CharityDeliverySystem() {
   useEffect(() => {
     const timer = setTimeout(saveData, 1000);
     return () => clearTimeout(timer);
-  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, selectedDate, deliveryType, user]);
+  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, activePollId, selectedDate, deliveryType, user]);
 
   // ============================================================================
   // DATE HELPERS (pure, usable from load before state is set)
@@ -206,6 +209,63 @@ export default function CharityDeliverySystem() {
     const parts = dateString.split('-');
     if (parts.length !== 3) return dateString;
     return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  };
+
+  // Day name -> index (Sun=0)
+  const dayNameToIndex = (name) => {
+    const map = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+    return map[(name || '').toLowerCase()];
+  };
+
+  // Compute the poll cutoff as the most recent {cutoffDay} at {cutoffHour}:{cutoffMinute}
+  // at or before the delivery date. Returns a Date (UTC instant) or null.
+  const computeCutoff = (deliveryDateStr) => {
+    if (!deliveryDateStr) return null;
+    const targetDow = dayNameToIndex(cutoffDay);
+    if (targetDow == null) return null;
+    const [y, m, d] = deliveryDateStr.split('-').map(Number);
+    // Delivery date at local midnight
+    const base = new Date(y, m - 1, d);
+    // Walk back to the most recent matching weekday (0..6 days back)
+    let diff = (base.getDay() - targetDow + 7) % 7;
+    const cutoffDate = new Date(base);
+    cutoffDate.setDate(base.getDate() - diff);
+    const hh = parseInt(cutoffHour) || 0;
+    const mm = parseInt(cutoffMinute) || 0;
+    if (forceUKTime) {
+      // Build the cutoff as a UK (Europe/London) wall-clock time, then get the UTC instant.
+      // Determine UK offset (GMT/BST) for that date using Intl.
+      const yy = cutoffDate.getFullYear();
+      const mo = String(cutoffDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(cutoffDate.getDate()).padStart(2, '0');
+      const hStr = String(hh).padStart(2, '0');
+      const mStr = String(mm).padStart(2, '0');
+      // Use a probe date to find the London offset in minutes
+      const probe = new Date(`${yy}-${mo}-${dd}T${hStr}:${mStr}:00Z`);
+      // offsetMinutes = (London wall time - UTC) for the probe
+      const utcParts = new Date(probe.toLocaleString('en-US', { timeZone: 'UTC' }));
+      const londonParts = new Date(probe.toLocaleString('en-US', { timeZone: 'Europe/London' }));
+      const offsetMin = Math.round((londonParts - utcParts) / 60000);
+      // The desired UK wall-clock instant in UTC = wallclock - offset
+      return new Date(Date.UTC(yy, cutoffDate.getMonth(), cutoffDate.getDate(), hh, mm, 0) - offsetMin * 60000);
+    }
+    // Local time
+    cutoffDate.setHours(hh, mm, 0, 0);
+    return cutoffDate;
+  };
+
+  const formatCutoff = (deliveryDateStr) => {
+    const c = computeCutoff(deliveryDateStr);
+    if (!c) return '';
+    const opts = { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', hour12: false };
+    if (forceUKTime) opts.timeZone = 'Europe/London';
+    return c.toLocaleString('en-GB', opts);
+  };
+
+  const isPollClosed = (deliveryDateStr) => {
+    const c = computeCutoff(deliveryDateStr);
+    if (!c) return false;
+    return new Date() > c;
   };
 
   const computeWeekType = (date, aDate, aWeek) => {
@@ -348,6 +408,7 @@ export default function CharityDeliverySystem() {
       totalPies += quantities.pies;
     });
     setCalculatedAddresses(calculated);
+    setWeekTotals({ chicken: totalChicken, meat: totalMeat, pies: totalPies });
     const emailContent = butcherEmailTemplate
       .replace(/{DATE}/g, formatUKDate(selectedDate))
       .replace(/{CHICKEN}/g, totalChicken)
@@ -652,9 +713,12 @@ export default function CharityDeliverySystem() {
       if (!window.confirm('Some drivers have no phone number and will not be able to vote. Continue anyway?')) return;
     }
     const pollId = `${selectedDate}-${Date.now().toString(36)}`;
+    const cutoffInstant = computeCutoff(selectedDate);
     set(ref(db, `polls/${pollId}`), {
       date: selectedDate,
       createdAt: new Date().toISOString(),
+      cutoffISO: cutoffInstant ? cutoffInstant.toISOString() : null,
+      cutoffLabel: formatCutoff(selectedDate),
       roster,
       votes: {}
     }).then(() => {
@@ -909,6 +973,7 @@ export default function CharityDeliverySystem() {
     if (unassigned.length > 0) result.__unassigned = unassigned;
     setProposedAllocation(result);
     setAllocationApproved(false);
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
     
   };
 
@@ -937,10 +1002,12 @@ export default function CharityDeliverySystem() {
     }
     setAllocations(proposedAllocation);
     setAllocationApproved(true);
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
   };
 
   const unlockAllocation = () => {
     setAllocationApproved(false);
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
   };
 
   // ============================================================================
@@ -1464,13 +1531,24 @@ export default function CharityDeliverySystem() {
                 <p style={{ fontSize: '13px', color: '#666' }}>
                   Opens a poll for this date. Drivers confirm their mobile number, then vote. Phone numbers are stored only as a secure fingerprint, never in the open.
                 </p>
-                <button onClick={openPollForVoting}
-                  style={{ padding: '10px 20px', backgroundColor: '#FF9800', color: 'white', border: 'none', cursor: 'pointer' }}>
-                  📣 Open Poll for Voting
-                </button>
+                {!activePollId ? (
+                  <button onClick={openPollForVoting}
+                    style={{ padding: '10px 20px', backgroundColor: '#FF9800', color: 'white', border: 'none', cursor: 'pointer' }}>
+                    📣 Open Poll for Voting
+                  </button>
+                ) : (
+                  <div style={{ backgroundColor: '#e8f5e9', border: '1px solid #4CAF50', borderRadius: '4px', padding: '10px', marginBottom: '10px', fontSize: '13px' }}>
+                    🔒 <strong>A poll is already live.</strong> It's locked so responses aren't lost on refresh or another device. To replace it, use "Start a new poll" below.
+                  </div>
+                )}
                 {activePollId && (
                   <div style={{ marginTop: '15px' }}>
-                    <p style={{ margin: '5px 0', fontSize: '13px' }}><strong>Poll is live!</strong> Share this link with your drivers:</p>
+                    <p style={{ margin: '5px 0', fontSize: '13px' }}><strong>Poll is live</strong> for {formatUKDate(activePollId.split('-').slice(0,3).join('-'))}{activePollId.split('-').slice(0,3).join('-') !== selectedDate ? ' — note: this is different from the date currently selected above' : ''}. Share this link with your drivers:</p>
+                    <p style={{ margin: '5px 0', fontSize: '13px', color: isPollClosed(activePollId.split('-').slice(0,3).join('-')) ? '#c62828' : '#2e7d32' }}>
+                      {isPollClosed(activePollId.split('-').slice(0,3).join('-'))
+                        ? `🔴 Poll closed (deadline was ${formatCutoff(activePollId.split('-').slice(0,3).join('-'))}). Late changes via the Allocate tab.`
+                        : `⏰ Closes ${formatCutoff(activePollId.split('-').slice(0,3).join('-'))}`}
+                    </p>
                     <input type="text" readOnly value={`${window.location.origin}/vote.html?poll=${activePollId}`}
                       style={{ width: '100%', padding: '8px', boxSizing: 'border-box', fontSize: '13px' }}
                       onFocus={(e) => e.target.select()} />
@@ -1483,6 +1561,31 @@ export default function CharityDeliverySystem() {
                       Copy Link
                     </button>
                     {copiedMessage && <span style={{ marginLeft: '10px', color: 'green' }}>{copiedMessage}</span>}
+                    <div style={{ marginTop: '12px' }}>
+                      <button onClick={() => {
+                          const pollDateStr = activePollId.split('-').slice(0,3).join('-');
+                          const link = `${window.location.origin}/vote.html?poll=${activePollId}`;
+                          const msg = pollMessage
+                            .replace(/{DATE}/g, formatUKDate(pollDateStr))
+                            .replace(/{CUTOFF}/g, formatCutoff(pollDateStr))
+                            .replace(/{LINK}/g, link);
+                          navigator.clipboard.writeText(msg);
+                          setCopiedMessage('Message copied!');
+                          setTimeout(() => setCopiedMessage(''), 2000);
+                        }}
+                        style={{ padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer', fontSize: '13px' }}>
+                        📋 Copy poll message (with link &amp; deadline)
+                      </button>
+                    </div>
+                    <div style={{ marginTop: '12px' }}>
+                      <button onClick={() => {
+                            openPollForVoting();
+                          }
+                        }}
+                        style={{ padding: '8px 16px', backgroundColor: '#fff', color: '#c62828', border: '1px solid #c62828', cursor: 'pointer', fontSize: '13px' }}>
+                        ⟳ Start a new poll (replaces current)
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1502,6 +1605,21 @@ export default function CharityDeliverySystem() {
                 <strong>Week:</strong> {detectedWeekType}{detectedFirstOfMonth ? ' + First of Month' : ''}<br />
                 <strong>Type:</strong> {deliveryType.charAt(0).toUpperCase() + deliveryType.slice(1)}
               </div>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '20px' }}>
+                <div style={{ flex: 1, minWidth: '120px', backgroundColor: '#fff8e1', border: '2px solid #ffb300', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '28px', fontWeight: 'bold' }}>{weekTotals.chicken}</div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>🍗 Chicken</div>
+                </div>
+                <div style={{ flex: 1, minWidth: '120px', backgroundColor: '#ffebee', border: '2px solid #e53935', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '28px', fontWeight: 'bold' }}>{weekTotals.meat}</div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>🍖 Meat</div>
+                </div>
+                <div style={{ flex: 1, minWidth: '120px', backgroundColor: '#efebe9', border: '2px solid #8d6e63', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '28px', fontWeight: 'bold' }}>{weekTotals.pies}</div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>🥧 Pies</div>
+                </div>
+              </div>
+              <p style={{ fontSize: '12px', color: '#888', marginTop: '-12px', marginBottom: '20px' }}>These totals match the butcher email at the bottom of this page.</p>
               <h3>Addresses</h3>
               <p style={{ fontSize: '13px', color: '#666' }}>You can override quantities or exclude an address for this week only. Overrides apply to this date and feed both the butcher order and driver lists. They don't change the standing pattern.</p>
               <div style={{ marginBottom: '20px' }}>
@@ -1570,6 +1688,32 @@ export default function CharityDeliverySystem() {
                 <strong>Delivery Date:</strong> {formatUKDate(selectedDate)} &nbsp;|&nbsp;
                 <strong>Stops:</strong> {Object.keys(calculatedAddresses).length}
               </div>
+
+              {activePollId && (() => {
+                const names = Object.keys(drivers);
+                let yes = 0, no = 0, waiting = 0;
+                names.forEach((name) => {
+                  let v = null;
+                  Object.values(pollVotes).forEach(x => { if (x && x.name === name) v = x.available; });
+                  if (v === true) yes++; else if (v === false) no++; else waiting++;
+                });
+                return (
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '15px' }}>
+                    <div style={{ flex: 1, minWidth: '110px', backgroundColor: '#e8f5e9', border: '2px solid #4CAF50', borderRadius: '6px', padding: '12px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '26px', fontWeight: 'bold' }}>{yes}</div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>✅ Available</div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: '110px', backgroundColor: '#ffebee', border: '2px solid #e53935', borderRadius: '6px', padding: '12px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '26px', fontWeight: 'bold' }}>{no}</div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>❌ Not available</div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: '110px', backgroundColor: '#f5f5f5', border: '2px solid #9e9e9e', borderRadius: '6px', padding: '12px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '26px', fontWeight: 'bold' }}>{waiting}</div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>⏳ Not responded</div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Availability */}
               <h3>1. Driver Availability</h3>
