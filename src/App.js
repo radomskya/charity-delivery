@@ -1010,9 +1010,17 @@ export default function CharityDeliverySystem() {
       const scale = 2; // retina-quality
       const width = 620;
       const headerH = 96;
-      const rowH = 64;
-      const footerH = 30;
-      const height = headerH + keys.length * rowH + footerH;
+      const rowH = 70;
+      const totalsH = 70;
+      const footerH = 20;
+      const height = headerH + keys.length * rowH + totalsH + footerH;
+
+      // compute totals for collection
+      let totC = 0, totM = 0, totP = 0;
+      keys.forEach((key) => {
+        const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+        totC += c.chicken; totM += c.meat; totP += c.pies;
+      });
 
       const canvas = document.createElement('canvas');
       canvas.width = width * scale;
@@ -1020,7 +1028,6 @@ export default function CharityDeliverySystem() {
       const ctx = canvas.getContext('2d');
       ctx.scale(scale, scale);
 
-      // background
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, width, height);
 
@@ -1036,7 +1043,6 @@ export default function CharityDeliverySystem() {
       ctx.fillStyle = '#666666';
       ctx.fillText('Week of ' + formatUKDate(selectedDate) + '  •  ' + keys.length + ' stops', 16, 64);
 
-      // header separator
       ctx.strokeStyle = '#333333';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -1044,7 +1050,6 @@ export default function CharityDeliverySystem() {
       ctx.lineTo(width - 16, headerH - 6);
       ctx.stroke();
 
-      // helper to truncate long text to fit a width
       const fit = (text, maxW) => {
         text = String(text || '');
         if (ctx.measureText(text).width <= maxW) return text;
@@ -1052,45 +1057,58 @@ export default function CharityDeliverySystem() {
         return text + '…';
       };
 
-      let y = headerH + 8;
+      let y = headerH + 10;
       keys.forEach((key, idx) => {
         const a = addresses[key] || {};
         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
 
-        // alternating row background
         if (idx % 2 === 1) {
           ctx.fillStyle = '#f6f6f6';
           ctx.fillRect(8, y - 6, width - 16, rowH);
         }
 
-        // address (left, bold)
+        // address + postcode (bold)
         ctx.fillStyle = '#111111';
-        ctx.font = 'bold 14px Arial, sans-serif';
-        ctx.fillText(fit(a.fullAddress || key, width - 150), 16, y);
+        ctx.font = 'bold 15px Arial, sans-serif';
+        const addrLine = (a.fullAddress || key) + (a.postcode ? '  ' + a.postcode : '');
+        ctx.fillText(fit(addrLine, width - 32), 16, y);
 
-        // quantities (right-aligned label)
-        ctx.font = 'bold 14px Arial, sans-serif';
+        // quantities, full words
+        ctx.font = '14px Arial, sans-serif';
         ctx.fillStyle = '#333333';
-        const qty = 'Chk ' + c.chicken + '   Mt ' + c.meat + '   Pie ' + c.pies;
-        ctx.fillText(qty, 16, y + 20);
+        const qty = 'Chicken: ' + c.chicken + '    Meat: ' + c.meat + '    Pies: ' + c.pies;
+        ctx.fillText(qty, 16, y + 22);
 
-        // notes (italic, grey) if present
+        // notes
         if (a.notes) {
           ctx.font = 'italic 12px Arial, sans-serif';
           ctx.fillStyle = '#777777';
-          ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 40);
+          ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 44);
         }
 
-        // row separator
         ctx.strokeStyle = '#e2e2e2';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(16, y + rowH - 10);
-        ctx.lineTo(width - 16, y + rowH - 10);
+        ctx.moveTo(16, y + rowH - 8);
+        ctx.lineTo(width - 16, y + rowH - 8);
         ctx.stroke();
 
         y += rowH;
       });
+
+      // TOTALS box (for collection)
+      y += 4;
+      ctx.fillStyle = '#eef6ee';
+      ctx.fillRect(8, y, width - 16, totalsH - 12);
+      ctx.strokeStyle = '#4CAF50';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(8, y, width - 16, totalsH - 12);
+      ctx.fillStyle = '#1b5e20';
+      ctx.font = 'bold 15px Arial, sans-serif';
+      ctx.fillText('TOTAL TO COLLECT', 20, y + 10);
+      ctx.font = 'bold 17px Arial, sans-serif';
+      ctx.fillStyle = '#111111';
+      ctx.fillText('Chicken: ' + totC + '      Meat: ' + totM + '      Pies: ' + totP, 20, y + 32);
 
       canvas.toBlob((blob) => {
         if (blob) resolve(blob); else reject(new Error('Could not create image'));
