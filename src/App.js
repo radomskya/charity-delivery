@@ -1063,7 +1063,7 @@ export default function CharityDeliverySystem() {
         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
 
         if (idx % 2 === 1) {
-          ctx.fillStyle = '#f6f6f6';
+          ctx.fillStyle = '#e3edf7';
           ctx.fillRect(8, y - 6, width - 16, rowH);
         }
 
