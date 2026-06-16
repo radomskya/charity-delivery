@@ -61,6 +61,10 @@
     </div>
 
     <!-- Step 1: enter phone -->
+    <div id="deadline-area" class="hidden" style="background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:10px;margin-bottom:14px;font-size:14px;">
+      <span id="deadline-text"></span>
+    </div>
+
     <div id="phone-step" class="hidden">
       <p>Please enter your mobile number to confirm who you are.</p>
       <input type="tel" id="phone-input" placeholder="e.g. 07700 123456" autocomplete="tel">
@@ -132,6 +136,12 @@
     var el = function(id){ return document.getElementById(id); };
     var roster = {};
     var pollDate = '';
+    var pollCutoffISO = null;
+    var pollCutoffLabel = '';
+    function pollIsClosed() {
+      if (!pollCutoffISO) return false;
+      return new Date() > new Date(pollCutoffISO);
+    }
     var matchedHash = null;
     var matchedName = null;
 
@@ -152,7 +162,20 @@
         var data = snap.val();
         roster = data.roster || {};
         pollDate = data.date || '';
+        pollCutoffISO = data.cutoffISO || null;
+        pollCutoffLabel = data.cutoffLabel || '';
         el('poll-date').textContent = formatUKDate(pollDate);
+        // Show the deadline to the driver
+        if (pollCutoffLabel) {
+          el('deadline-text').textContent = 'Please respond by ' + pollCutoffLabel + ' (UK time).';
+          el('deadline-area').classList.remove('hidden');
+        }
+        // Hard stop if the deadline has already passed
+        if (pollIsClosed()) {
+          el('loading').classList.add('hidden');
+          showError('This poll has closed' + (pollCutoffLabel ? ' (deadline: ' + pollCutoffLabel + ')' : '') + '. Please contact your coordinator directly if your availability has changed.');
+          return;
+        }
         el('loading').classList.add('hidden');
         el('phone-step').classList.remove('hidden');
       }).catch(function(err) {
@@ -181,6 +204,11 @@
     });
 
     function submitVote(answer) {
+      if (pollIsClosed()) {
+        el('vote-step').classList.add('hidden');
+        showError('This poll has closed' + (pollCutoffLabel ? ' (deadline: ' + pollCutoffLabel + ')' : '') + '. Your response was not recorded. Please contact your coordinator directly.');
+        return;
+      }
       db.ref('polls/' + pollId + '/votes/' + matchedHash).set({
         name: matchedName,
         available: answer,
