@@ -76,6 +76,9 @@ export default function CharityDeliverySystem() {
   const [allocations, setAllocations] = useState({});
   const [autoAllocated, setAutoAllocated] = useState(false);
 
+  // Per-week overrides: { 'yyyy-mm-dd': { addressKey: { chicken, meat, pies, excluded } } }
+  const [weekOverrides, setWeekOverrides] = useState({});
+
   // Message customization
   const [pollMessage, setPollMessage] = useState('Hi! Quick question - are you available for delivery on {CUTOFF}? Vote here: {LINK}');
   const [emailTemplate, setEmailTemplate] = useState('');
@@ -138,6 +141,7 @@ export default function CharityDeliverySystem() {
         setForceUKTime(data.forceUKTime !== false);
         setAllocations(data.allocations || {});
         setAutoAllocated(data.autoAllocated || false);
+        setWeekOverrides(data.weekOverrides || {});
         // Restore the selected delivery date and recompute week type
         if (data.selectedDate) {
           setSelectedDate(data.selectedDate);
@@ -172,6 +176,7 @@ export default function CharityDeliverySystem() {
       pollResponses,
       allocations,
       autoAllocated,
+      weekOverrides,
       selectedDate: selectedDate || null,
       deliveryType
     });
@@ -180,7 +185,7 @@ export default function CharityDeliverySystem() {
   useEffect(() => {
     const timer = setTimeout(saveData, 1000);
     return () => clearTimeout(timer);
-  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, selectedDate, deliveryType, user]);
+  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, weekOverrides, selectedDate, deliveryType, user]);
 
   // ============================================================================
   // DATE HELPERS (pure, usable from load before state is set)
@@ -277,15 +282,30 @@ export default function CharityDeliverySystem() {
     if (!selectedDate || !detectedWeekType) return;
     const calculated = {};
     let totalChicken = 0, totalMeat = 0, totalPies = 0;
+    const dateOverrides = (weekOverrides && weekOverrides[selectedDate]) || {};
     Object.keys(addresses).forEach((key) => {
       const address = addresses[key];
       if (isOnHold(address, selectedDate)) return; // skip held
-      const quantities = combineRules(address, detectedWeekType, deliveryType, detectedFirstOfMonth);
+      const ov = dateOverrides[key];
+      if (ov && ov.excluded) return; // excluded for this week only
+      let quantities;
+      if (ov && (ov.chicken != null || ov.meat != null || ov.pies != null)) {
+        // Per-week override quantities take priority
+        const base = combineRules(address, detectedWeekType, deliveryType, detectedFirstOfMonth);
+        quantities = {
+          chicken: ov.chicken != null ? parseInt(ov.chicken) || 0 : base.chicken,
+          meat: ov.meat != null ? parseInt(ov.meat) || 0 : base.meat,
+          pies: ov.pies != null ? parseInt(ov.pies) || 0 : base.pies
+        };
+      } else {
+        quantities = combineRules(address, detectedWeekType, deliveryType, detectedFirstOfMonth);
+      }
       calculated[key] = {
         ...quantities,
         notes: address.notes || '',
         fullAddress: address.fullAddress,
-        postcode: address.postcode
+        postcode: address.postcode,
+        overridden: !!ov && !ov.excluded && (ov.chicken != null || ov.meat != null || ov.pies != null)
       };
       totalChicken += quantities.chicken;
       totalMeat += quantities.meat;
@@ -302,7 +322,7 @@ export default function CharityDeliverySystem() {
 
   useEffect(() => {
     calculateAllAddresses();
-  }, [selectedDate, deliveryType, detectedWeekType, detectedFirstOfMonth, addresses]);
+  }, [selectedDate, deliveryType, detectedWeekType, detectedFirstOfMonth, addresses, weekOverrides]);
 
   // ============================================================================
   // HTML TABLE GENERATION
@@ -371,7 +391,7 @@ export default function CharityDeliverySystem() {
   // ============================================================================
 
   const startAddAddress = () => {
-    setEditingAddress({ originalKey: null, hold: { type: 'none', from: '', to: '' } });
+    setEditingAddress({ originalKey: null, hold: { type: 'none', from: '', to: '' }, preferredDriver: '', avoidDrivers: [] });
     setShowAddAddress(true);
   };
 
@@ -396,7 +416,9 @@ export default function CharityDeliverySystem() {
       notes: a.notes || '',
       lat: a.lat != null ? a.lat : '',
       lng: a.lng != null ? a.lng : '',
-      hold: a.hold || { type: 'none', from: '', to: '' }
+      hold: a.hold || { type: 'none', from: '', to: '' },
+      preferredDriver: a.preferredDriver || '',
+      avoidDrivers: a.avoidDrivers || []
     });
     setShowAddAddress(true);
   };
@@ -457,7 +479,9 @@ export default function CharityDeliverySystem() {
       lat: lat,
       lng: lng,
       needsLocation: needsLocation,
-      hold: editingAddress.hold || { type: 'none', from: '', to: '' }
+      hold: editingAddress.hold || { type: 'none', from: '', to: '' },
+      preferredDriver: editingAddress.preferredDriver || '',
+      avoidDrivers: editingAddress.avoidDrivers || []
     };
 
     const newAddresses = { ...addresses };
@@ -624,6 +648,42 @@ export default function CharityDeliverySystem() {
   };
 
   // ============================================================================
+  // PER-WEEK OVERRIDES
+  // ============================================================================
+
+  const setOverrideField = (key, field, value) => {
+    setWeekOverrides(prev => {
+      const forDate = { ...(prev[selectedDate] || {}) };
+      const existing = { ...(forDate[key] || {}) };
+      if (value === '' || value == null) {
+        delete existing[field];
+      } else {
+        existing[field] = value;
+      }
+      forDate[key] = existing;
+      return { ...prev, [selectedDate]: forDate };
+    });
+  };
+
+  const toggleExcludeAddress = (key) => {
+    setWeekOverrides(prev => {
+      const forDate = { ...(prev[selectedDate] || {}) };
+      const existing = { ...(forDate[key] || {}) };
+      existing.excluded = !existing.excluded;
+      forDate[key] = existing;
+      return { ...prev, [selectedDate]: forDate };
+    });
+  };
+
+  const clearOverride = (key) => {
+    setWeekOverrides(prev => {
+      const forDate = { ...(prev[selectedDate] || {}) };
+      delete forDate[key];
+      return { ...prev, [selectedDate]: forDate };
+    });
+  };
+
+  // ============================================================================
   // RENDER
   // ============================================================================
 
@@ -767,6 +827,36 @@ export default function CharityDeliverySystem() {
                   <input type="text" placeholder="Longitude" value={editingAddress?.lng ?? ''}
                     onChange={(e) => setEditingAddress({ ...editingAddress, lng: e.target.value })}
                     style={{ padding: '8px', boxSizing: 'border-box' }} />
+                </div>
+              </div>
+
+              <div style={{ backgroundColor: '#f3e5f5', padding: '10px', borderRadius: '4px', marginBottom: '10px' }}>
+                <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#555' }}><strong>Driver preferences</strong> (used by auto-allocation).</p>
+                <label style={{ fontSize: '12px' }}>Preferred driver:</label>
+                <select
+                  value={editingAddress?.preferredDriver || ''}
+                  onChange={(e) => setEditingAddress({ ...editingAddress, preferredDriver: e.target.value })}
+                  style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }}>
+                  <option value="">No preference</option>
+                  {Object.keys(drivers).map((d) => (<option key={d} value={d}>{d}</option>))}
+                </select>
+                <label style={{ fontSize: '12px' }}>Avoid these drivers:</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '5px' }}>
+                  {Object.keys(drivers).length === 0 && <span style={{ fontSize: '12px', color: '#999' }}>Add drivers first</span>}
+                  {Object.keys(drivers).map((d) => {
+                    const avoid = editingAddress?.avoidDrivers || [];
+                    const checked = avoid.includes(d);
+                    return (
+                      <label key={d} style={{ fontSize: '13px' }}>
+                        <input type="checkbox" checked={checked}
+                          onChange={(e) => {
+                            const cur = editingAddress?.avoidDrivers || [];
+                            const next = e.target.checked ? [...cur, d] : cur.filter(x => x !== d);
+                            setEditingAddress({ ...editingAddress, avoidDrivers: next });
+                          }} /> {d}
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -940,14 +1030,40 @@ export default function CharityDeliverySystem() {
                 <strong>Type:</strong> {deliveryType.charAt(0).toUpperCase() + deliveryType.slice(1)}
               </div>
               <h3>Addresses</h3>
+              <p style={{ fontSize: '13px', color: '#666' }}>You can override quantities or exclude an address for this week only. Overrides apply to this date and feed both the butcher order and driver lists. They don't change the standing pattern.</p>
               <div style={{ marginBottom: '20px' }}>
-                {Object.keys(calculatedAddresses).map((key) => (
-                  <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px' }}>
-                    <strong>{calculatedAddresses[key].fullAddress}</strong>
-                    <p style={{ margin: '5px 0' }}>Chicken: {calculatedAddresses[key].chicken}, Meat: {calculatedAddresses[key].meat}, Pies: {calculatedAddresses[key].pies}</p>
-                    {calculatedAddresses[key].notes && <p style={{ margin: '5px 0', fontSize: '12px', color: '#666' }}>📝 {calculatedAddresses[key].notes}</p>}
-                  </div>
-                ))}
+                {Object.keys(addresses).filter(key => !isOnHold(addresses[key], selectedDate)).map((key) => {
+                  const dateOv = (weekOverrides && weekOverrides[selectedDate] && weekOverrides[selectedDate][key]) || {};
+                  const calc = calculatedAddresses[key];
+                  const excluded = !!dateOv.excluded;
+                  return (
+                    <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: excluded ? '#fafafa' : (calc && calc.overridden ? '#fffde7' : 'white') }}>
+                      <strong style={{ textDecoration: excluded ? 'line-through' : 'none' }}>{addresses[key].fullAddress}</strong>
+                      {calc && calc.overridden && !excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#f57f17', fontWeight: 'bold' }}>✎ overridden this week</span>}
+                      {excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#999', fontWeight: 'bold' }}>excluded this week</span>}
+                      {!excluded && (
+                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px', flexWrap: 'wrap' }}>
+                          <label style={{ fontSize: '12px' }}>🍗 <input type="number" style={{ width: '55px', padding: '4px' }}
+                            value={dateOv.chicken != null ? dateOv.chicken : (calc ? calc.chicken : 0)}
+                            onChange={(e) => setOverrideField(key, 'chicken', e.target.value)} /></label>
+                          <label style={{ fontSize: '12px' }}>🍖 <input type="number" style={{ width: '55px', padding: '4px' }}
+                            value={dateOv.meat != null ? dateOv.meat : (calc ? calc.meat : 0)}
+                            onChange={(e) => setOverrideField(key, 'meat', e.target.value)} /></label>
+                          <label style={{ fontSize: '12px' }}>🥧 <input type="number" style={{ width: '55px', padding: '4px' }}
+                            value={dateOv.pies != null ? dateOv.pies : (calc ? calc.pies : 0)}
+                            onChange={(e) => setOverrideField(key, 'pies', e.target.value)} /></label>
+                          {(calc && calc.overridden) && <button onClick={() => clearOverride(key)} style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: '#9e9e9e', color: 'white', border: 'none', cursor: 'pointer' }}>Reset</button>}
+                        </div>
+                      )}
+                      {addresses[key].notes && <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: '#666' }}>📝 {addresses[key].notes}</p>}
+                      <div style={{ marginTop: '8px' }}>
+                        <button onClick={() => toggleExcludeAddress(key)} style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: excluded ? '#4CAF50' : '#ff9800', color: 'white', border: 'none', cursor: 'pointer' }}>
+                          {excluded ? 'Include this week' : 'Exclude this week'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
               <h3>Butcher Email</h3>
               <textarea value={emailTemplate} onChange={(e) => setEmailTemplate(e.target.value)}
