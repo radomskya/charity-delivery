@@ -1004,31 +1004,100 @@ export default function CharityDeliverySystem() {
     .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
   // Rasterise the XHTML into a PNG blob via SVG foreignObject + canvas
+  // Draw the delivery list directly onto a canvas (reliable on all phones - no foreignObject).
   const rasteriseToPng = (driverName, keys) => new Promise((resolve, reject) => {
     try {
-      const width = 600;
-      const height = 150 + keys.length * 50 + 30;
-      const xhtml = buildDriverXHTML(driverName, keys);
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%">${xhtml}</foreignObject></svg>`;
-      const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(svgBlob);
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, width, height);
-        ctx.drawImage(img, 0, 0);
-        URL.revokeObjectURL(url);
-        canvas.toBlob((blob) => {
-          if (blob) resolve(blob); else reject(new Error('Could not create image'));
-        }, 'image/png');
+      const scale = 2; // retina-quality
+      const width = 620;
+      const headerH = 96;
+      const rowH = 64;
+      const footerH = 30;
+      const height = headerH + keys.length * rowH + footerH;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width * scale;
+      canvas.height = height * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+
+      // background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+
+      // header
+      ctx.fillStyle = '#222222';
+      ctx.font = 'bold 20px Arial, sans-serif';
+      ctx.textBaseline = 'top';
+      ctx.fillText('DELIVERY LIST', 16, 14);
+      ctx.font = 'bold 16px Arial, sans-serif';
+      ctx.fillStyle = '#444444';
+      ctx.fillText(driverName, 16, 40);
+      ctx.font = '13px Arial, sans-serif';
+      ctx.fillStyle = '#666666';
+      ctx.fillText('Week of ' + formatUKDate(selectedDate) + '  •  ' + keys.length + ' stops', 16, 64);
+
+      // header separator
+      ctx.strokeStyle = '#333333';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(16, headerH - 6);
+      ctx.lineTo(width - 16, headerH - 6);
+      ctx.stroke();
+
+      // helper to truncate long text to fit a width
+      const fit = (text, maxW) => {
+        text = String(text || '');
+        if (ctx.measureText(text).width <= maxW) return text;
+        while (text.length > 1 && ctx.measureText(text + '…').width > maxW) text = text.slice(0, -1);
+        return text + '…';
       };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image render failed')); };
-      img.src = url;
-    } catch (e) { reject(e); }
+
+      let y = headerH + 8;
+      keys.forEach((key, idx) => {
+        const a = addresses[key] || {};
+        const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+
+        // alternating row background
+        if (idx % 2 === 1) {
+          ctx.fillStyle = '#f6f6f6';
+          ctx.fillRect(8, y - 6, width - 16, rowH);
+        }
+
+        // address (left, bold)
+        ctx.fillStyle = '#111111';
+        ctx.font = 'bold 14px Arial, sans-serif';
+        ctx.fillText(fit(a.fullAddress || key, width - 150), 16, y);
+
+        // quantities (right-aligned label)
+        ctx.font = 'bold 14px Arial, sans-serif';
+        ctx.fillStyle = '#333333';
+        const qty = 'Chk ' + c.chicken + '   Mt ' + c.meat + '   Pie ' + c.pies;
+        ctx.fillText(qty, 16, y + 20);
+
+        // notes (italic, grey) if present
+        if (a.notes) {
+          ctx.font = 'italic 12px Arial, sans-serif';
+          ctx.fillStyle = '#777777';
+          ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 40);
+        }
+
+        // row separator
+        ctx.strokeStyle = '#e2e2e2';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(16, y + rowH - 10);
+        ctx.lineTo(width - 16, y + rowH - 10);
+        ctx.stroke();
+
+        y += rowH;
+      });
+
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob); else reject(new Error('Could not create image'));
+      }, 'image/png');
+    } catch (e) {
+      reject(e);
+    }
   });
 
   const shareDriver = async (driverName, keys) => {
