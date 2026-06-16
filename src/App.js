@@ -213,8 +213,10 @@ export default function CharityDeliverySystem() {
   };
 
   const computeFirstOfMonth = (date) => {
+    // First delivery of a calendar month: the delivery date falls within the
+    // first 7 days of the month. With weekly deliveries exactly one lands here.
     const d = new Date(date);
-    return d.getDate() <= 8;
+    return d.getDate() <= 7;
   };
 
   const detectWeekType = (date) => computeWeekType(date, anchorDate, anchorWeek);
@@ -252,26 +254,47 @@ export default function CharityDeliverySystem() {
   // RULE COMBINING - SINGLE/DOUBLE/TRIPLE
   // ============================================================================
 
-  const combineRules = (address, weekType, deliveryTypeSelected, isFirstMonth) => {
+  // Add a number of weeks to a yyyy-mm-dd date string, returning a new yyyy-mm-dd string
+  const addWeeksToDate = (dateString, weeks) => {
+    const d = new Date(dateString);
+    d.setDate(d.getDate() + weeks * 7);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  // Build the list of covered weeks for a delivery: each entry has the week pattern (A/B)
+  // and whether that specific week is a first-of-month delivery.
+  const coveredWeeks = (deliveryDate, deliveryTypeSelected) => {
+    const count = deliveryTypeSelected === 'triple' ? 3 : (deliveryTypeSelected === 'double' ? 2 : 1);
+    const weeks = [];
+    for (let i = 0; i < count; i++) {
+      const wkDate = addWeeksToDate(deliveryDate, i);
+      weeks.push({
+        weekType: computeWeekType(wkDate, anchorDate, anchorWeek),
+        firstOfMonth: computeFirstOfMonth(wkDate) && anchorFirstOfMonth
+      });
+    }
+    return weeks;
+  };
+
+  const combineRules = (address, deliveryDate, deliveryTypeSelected) => {
     if (!address) return { chicken: 0, meat: 0, pies: 0 };
-    let result = { chicken: 0, meat: 0, pies: 0 };
     const addQuantities = (current, toAdd) => ({
       chicken: current.chicken + toAdd.chicken,
       meat: current.meat + toAdd.meat,
       pies: current.pies + toAdd.pies
     });
-    if (deliveryTypeSelected === 'single') {
-      result = weekType === 'A' ? { ...address.weekA } : { ...address.weekB };
-      if (isFirstMonth) result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
-    } else if (deliveryTypeSelected === 'double') {
-      if (weekType === 'A') result = addQuantities(address.weekA, address.weekB);
-      else result = addQuantities(address.weekB, address.weekA);
-      if (isFirstMonth) result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
-    } else if (deliveryTypeSelected === 'triple') {
-      if (weekType === 'A') result = addQuantities(addQuantities(address.weekA, address.weekB), address.weekA);
-      else result = addQuantities(addQuantities(address.weekB, address.weekA), address.weekB);
-      if (isFirstMonth) result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
-    }
+    let result = { chicken: 0, meat: 0, pies: 0 };
+    const weeks = coveredWeeks(deliveryDate, deliveryTypeSelected);
+    weeks.forEach((wk) => {
+      const base = wk.weekType === 'A' ? address.weekA : address.weekB;
+      result = addQuantities(result, base || { chicken: 0, meat: 0, pies: 0 });
+      if (wk.firstOfMonth) {
+        result = addQuantities(result, address.firstOfMonth || { chicken: 0, meat: 0, pies: 0 });
+      }
+    });
     return result;
   };
 
@@ -292,14 +315,14 @@ export default function CharityDeliverySystem() {
       let quantities;
       if (ov && (ov.chicken != null || ov.meat != null || ov.pies != null)) {
         // Per-week override quantities take priority
-        const base = combineRules(address, detectedWeekType, deliveryType, detectedFirstOfMonth);
+        const base = combineRules(address, selectedDate, deliveryType);
         quantities = {
           chicken: ov.chicken != null ? parseInt(ov.chicken) || 0 : base.chicken,
           meat: ov.meat != null ? parseInt(ov.meat) || 0 : base.meat,
           pies: ov.pies != null ? parseInt(ov.pies) || 0 : base.pies
         };
       } else {
-        quantities = combineRules(address, detectedWeekType, deliveryType, detectedFirstOfMonth);
+        quantities = combineRules(address, selectedDate, deliveryType);
       }
       calculated[key] = {
         ...quantities,
