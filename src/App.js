@@ -334,6 +334,8 @@ export default function CharityDeliverySystem() {
       } else {
         quantities = combineRules(address, selectedDate, deliveryType);
       }
+      // Nothing to deliver this week -> don't include in the order, allocation, or driver lists.
+      if ((quantities.chicken + quantities.meat + quantities.pies) === 0) return;
       calculated[key] = {
         ...quantities,
         notes: address.notes || '',
@@ -890,6 +892,127 @@ export default function CharityDeliverySystem() {
   };
 
   // ============================================================================
+  // PER-DRIVER SEND (image via Web Share, route link)
+  // ============================================================================
+
+  const buildRouteLink = (keys) => {
+    // Use coordinates if available, else the postal address text, as Google Maps waypoints.
+    const parts = keys.map((key) => {
+      const a = addresses[key] || {};
+      if (typeof a.lat === 'number' && typeof a.lng === 'number') {
+        return `${a.lat},${a.lng}`;
+      }
+      return encodeURIComponent(a.fullAddress || key);
+    });
+    if (parts.length === 0) return '';
+    return 'https://www.google.com/maps/dir/' + parts.join('/');
+  };
+
+  const buildDriverCaption = (driverName, keys) => {
+    const header = deliveryMessage
+      .replace(/{DRIVER}/g, driverName)
+      .replace(/{DATE}/g, formatUKDate(selectedDate))
+      .replace(/{STOPS}/g, keys.length);
+    const route = buildRouteLink(keys);
+    return header + (route ? `\n\n🗺️ Route: ${route}` : '');
+  };
+
+  // Build well-formed XHTML for the driver's delivery table (for rasterising to PNG)
+  const buildDriverXHTML = (driverName, keys) => {
+    const width = 600;
+    const rowsHTML = keys.map((key) => {
+      const a = addresses[key] || {};
+      const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+      const notes = a.notes ? `<div style="font-size:11px;color:#666;margin-top:2px;">${escapeXML(a.notes)}</div>` : '';
+      return `<tr style="border-bottom:1px solid #dddddd;">
+        <td style="padding:8px;border-right:1px solid #dddddd;vertical-align:top;"><strong>${escapeXML(a.fullAddress || key)}</strong>${notes}</td>
+        <td style="padding:8px;text-align:center;border-right:1px solid #dddddd;font-weight:bold;">${c.chicken}</td>
+        <td style="padding:8px;text-align:center;border-right:1px solid #dddddd;font-weight:bold;">${c.meat}</td>
+        <td style="padding:8px;text-align:center;font-weight:bold;">${c.pies}</td>
+      </tr>`;
+    }).join('');
+    return `<div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,sans-serif;background:#ffffff;padding:16px;width:${width - 32}px;color:#222222;">
+      <div style="font-size:18px;font-weight:bold;margin-bottom:4px;">DELIVERY LIST — ${escapeXML(driverName)}</div>
+      <div style="font-size:13px;color:#666666;margin-bottom:2px;">Week of: ${formatUKDate(selectedDate)}</div>
+      <div style="font-size:13px;color:#666666;margin-bottom:10px;">Total stops: ${keys.length}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <tr style="background:#f0f0f0;">
+          <th style="padding:8px;text-align:left;border-bottom:2px solid #333333;">Address</th>
+          <th style="padding:8px;text-align:center;border-bottom:2px solid #333333;">Chk</th>
+          <th style="padding:8px;text-align:center;border-bottom:2px solid #333333;">Mt</th>
+          <th style="padding:8px;text-align:center;border-bottom:2px solid #333333;">Pie</th>
+        </tr>
+        ${rowsHTML}
+      </table>
+    </div>`;
+  };
+
+  const escapeXML = (s) => String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+
+  // Rasterise the XHTML into a PNG blob via SVG foreignObject + canvas
+  const rasteriseToPng = (driverName, keys) => new Promise((resolve, reject) => {
+    try {
+      const width = 600;
+      const height = 150 + keys.length * 50 + 30;
+      const xhtml = buildDriverXHTML(driverName, keys);
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%">${xhtml}</foreignObject></svg>`;
+      const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        canvas.toBlob((blob) => {
+          if (blob) resolve(blob); else reject(new Error('Could not create image'));
+        }, 'image/png');
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image render failed')); };
+      img.src = url;
+    } catch (e) { reject(e); }
+  });
+
+  const shareDriver = async (driverName, keys) => {
+    const caption = buildDriverCaption(driverName, keys);
+    try {
+      const blob = await rasteriseToPng(driverName, keys);
+      const file = new File([blob], `delivery-${driverName.replace(/\s+/g,'-')}.png`, { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], text: caption });
+        return;
+      }
+      // Fallback: download the image and copy the caption
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = file.name; a.click();
+      URL.revokeObjectURL(url);
+      try { await navigator.clipboard.writeText(caption); } catch (e) {}
+      alert('Your phone/browser does not support direct image sharing here. The image has been downloaded and the message copied — attach the image in WhatsApp and paste the message.');
+    } catch (e) {
+      alert('Could not generate the image: ' + e.message);
+    }
+  };
+
+  const downloadDriverImage = async (driverName, keys) => {
+    try {
+      const blob = await rasteriseToPng(driverName, keys);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `delivery-${driverName.replace(/\s+/g,'-')}.png`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Could not generate the image: ' + e.message);
+    }
+  };
+
+  // ============================================================================
   // RENDER
   // ============================================================================
 
@@ -1110,6 +1233,7 @@ export default function CharityDeliverySystem() {
               return (
                 <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: held ? '#fff3e0' : 'white' }}>
                   <strong>{a.fullAddress}</strong>
+                  {a.postcode && <span style={{ marginLeft: '8px', color: '#777', fontSize: '12px' }}>{a.postcode}</span>}
                   {a.needsLocation && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#e65100', fontWeight: 'bold' }}>⚠ needs location</span>}
                   {a.hold && a.hold.type && a.hold.type !== 'none' && (
                     <span style={{ marginLeft: '8px', fontSize: '11px', color: '#e65100', fontWeight: 'bold' }}>
@@ -1244,11 +1368,14 @@ export default function CharityDeliverySystem() {
                   const dateOv = (weekOverrides && weekOverrides[selectedDate] && weekOverrides[selectedDate][key]) || {};
                   const calc = calculatedAddresses[key];
                   const excluded = !!dateOv.excluded;
+                  const total = calc ? (calc.chicken + calc.meat + calc.pies) : 0;
+                  const zeroThisWeek = !excluded && total === 0;
                   return (
-                    <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: excluded ? '#fafafa' : (calc && calc.overridden ? '#fffde7' : 'white') }}>
+                    <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: excluded ? '#fafafa' : (zeroThisWeek ? '#f7f7f7' : (calc && calc.overridden ? '#fffde7' : 'white')), opacity: zeroThisWeek ? 0.75 : 1 }}>
                       <strong style={{ textDecoration: excluded ? 'line-through' : 'none' }}>{addresses[key].fullAddress}</strong>
                       {calc && calc.overridden && !excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#f57f17', fontWeight: 'bold' }}>✎ overridden this week</span>}
                       {excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#999', fontWeight: 'bold' }}>excluded this week</span>}
+                      {zeroThisWeek && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#999' }}>no items this week (you can add a one-off below)</span>}
                       {!excluded && (
                         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px', flexWrap: 'wrap' }}>
                           <label style={{ fontSize: '12px' }}>🍗 <input type="number" style={{ width: '55px', padding: '4px' }}
@@ -1418,24 +1545,69 @@ export default function CharityDeliverySystem() {
       {/* SEND TAB */}
       {activeTab === 'send' && (
         <div>
-          <h2>📤 Send Delivery Messages</h2>
-          {selectedDate ? (
+          <h2>📤 Send to Drivers</h2>
+          {!selectedDate ? (
+            <p>Select a delivery date in the Poll tab first.</p>
+          ) : !allocationApproved ? (
+            <div style={{ backgroundColor: '#fff3e0', padding: '15px', borderRadius: '4px', border: '1px solid #ffcc80' }}>
+              <p style={{ margin: 0 }}>⚠ No approved allocation yet. Go to the <strong>Allocate</strong> tab, run auto-allocation, review, and approve — then come back here to send.</p>
+            </div>
+          ) : (
             <>
-              <h3>WhatsApp Message Preview</h3>
-              <div dangerouslySetInnerHTML={{ __html: generateHTMLTable() }}
-                style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '20px', backgroundColor: '#f9f9f9' }} />
-              <button onClick={() => {
-                  const html = generateHTMLTable();
-                  const blob = new Blob([html], { type: 'text/html' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url; a.download = 'delivery-list.html'; a.click();
-                }}
-                style={{ padding: '10px 20px', backgroundColor: '#25D366', color: 'white', border: 'none', cursor: 'pointer', marginRight: '10px' }}>
-                Download Image
-              </button>
+              <div style={{ backgroundColor: '#e8f5e9', padding: '12px', borderRadius: '4px', marginBottom: '15px' }}>
+                <strong>Approved plan for {formatUKDate(selectedDate)}.</strong> Tap Share on each driver to send their list (image + route link) via WhatsApp.
+              </div>
+              {Object.keys(allocations).filter(d => d !== '__unassigned' && allocations[d] && allocations[d].length > 0).map((driver) => {
+                const keys = allocations[driver];
+                return (
+                  <div key={driver} style={{ border: '1px solid #ddd', borderRadius: '6px', padding: '14px', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                      <div>
+                        <strong style={{ fontSize: '16px' }}>{driver}</strong>
+                        {driverPhones[driver] && <span style={{ marginLeft: '10px', color: '#666', fontSize: '13px' }}>📞 {driverPhones[driver]}</span>}
+                        <span style={{ marginLeft: '10px', color: '#666', fontSize: '13px' }}>{keys.length} stops</span>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: '10px', marginBottom: '10px' }}>
+                      {keys.map((key) => {
+                        const a = addresses[key] || {};
+                        const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+                        return (
+                          <div key={key} style={{ padding: '6px 0', borderTop: '1px solid #f0f0f0', fontSize: '13px' }}>
+                            <strong>{a.fullAddress || key}</strong>
+                            <div style={{ color: '#444' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
+                            {a.notes && <div style={{ color: '#888', fontSize: '12px' }}>📝 {a.notes}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <button onClick={() => shareDriver(driver, keys)}
+                        style={{ padding: '10px 18px', backgroundColor: '#25D366', color: 'white', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>
+                        📲 Share to WhatsApp
+                      </button>
+                      <button onClick={() => downloadDriverImage(driver, keys)}
+                        style={{ padding: '10px 18px', backgroundColor: '#607d8b', color: 'white', border: 'none', cursor: 'pointer' }}>
+                        ⬇ Download image
+                      </button>
+                      <a href={buildRouteLink(keys)} target="_blank" rel="noopener noreferrer"
+                        style={{ padding: '10px 18px', backgroundColor: '#2196F3', color: 'white', textDecoration: 'none', display: 'inline-block' }}>
+                        🗺️ Route
+                      </a>
+                      {driverPhones[driver] && (
+                        <a href={`https://wa.me/${driverPhones[driver].replace(/\D/g,'').replace(/^0/, '44')}`} target="_blank" rel="noopener noreferrer"
+                          style={{ padding: '10px 18px', backgroundColor: '#128C7E', color: 'white', textDecoration: 'none', display: 'inline-block' }}>
+                          💬 Open chat
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </>
-          ) : (<p>Select a delivery date in the Poll tab first.</p>)}
+          )}
         </div>
       )}
 
@@ -1524,7 +1696,63 @@ export default function CharityDeliverySystem() {
             </button>
           </div>
           <h3>Delivery Analytics</h3>
-          <p style={{ fontSize: '13px', color: '#666' }}>Delivery tracking will appear here once driver allocation is set up.</p>
+          {!allocationApproved ? (
+            <p style={{ fontSize: '13px', color: '#666' }}>Approve an allocation (in the Allocate tab) to see delivery stats here.</p>
+          ) : (
+            <div>
+              <div style={{ backgroundColor: '#e8f5e9', padding: '12px', borderRadius: '4px', marginBottom: '15px' }}>
+                <strong>Approved plan for {formatUKDate(selectedDate)}</strong>
+              </div>
+              {(() => {
+                const driverList = Object.keys(allocations).filter(d => d !== '__unassigned');
+                let totC = 0, totM = 0, totP = 0, totStops = 0;
+                driverList.forEach(d => {
+                  (allocations[d] || []).forEach(key => {
+                    const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+                    totC += c.chicken; totM += c.meat; totP += c.pies; totStops += 1;
+                  });
+                });
+                return (
+                  <>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '15px' }}>
+                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{driverList.length}</strong><br/>drivers</div>
+                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{totStops}</strong><br/>stops</div>
+                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{totC}</strong> 🍗<br/>chicken</div>
+                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{totM}</strong> 🍖<br/>meat</div>
+                      <div style={{ background: '#f5f5f5', padding: '12px 18px', borderRadius: '4px' }}><strong>{totP}</strong> 🥧<br/>pies</div>
+                    </div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                      <tbody>
+                        <tr style={{ background: '#f0f0f0' }}>
+                          <th style={{ padding: '8px', textAlign: 'left', borderBottom: '2px solid #333' }}>Driver</th>
+                          <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>Stops</th>
+                          <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>🍗</th>
+                          <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>🍖</th>
+                          <th style={{ padding: '8px', borderBottom: '2px solid #333' }}>🥧</th>
+                        </tr>
+                        {driverList.map(d => {
+                          let c=0,m=0,p=0;
+                          (allocations[d] || []).forEach(key => {
+                            const q = calculatedAddresses[key] || { chicken:0,meat:0,pies:0 };
+                            c+=q.chicken; m+=q.meat; p+=q.pies;
+                          });
+                          return (
+                            <tr key={d} style={{ borderBottom: '1px solid #ddd' }}>
+                              <td style={{ padding: '8px' }}>{d}</td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>{(allocations[d]||[]).length}</td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>{c}</td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>{m}</td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>{p}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </>
+                );
+              })()}
+            </div>
+          )}
         </div>
       )}
     </div>
