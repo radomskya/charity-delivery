@@ -1486,7 +1486,7 @@ export default function CharityDeliverySystem() {
       const scale = 2; // retina-quality
       const width = 620;
       const headerH = 96;
-      const rowH = 70;
+      const rowH = 78;
       const totalsH = 70;
       const footerH = 20;
       const height = headerH + keys.length * rowH + totalsH + footerH;
@@ -1546,21 +1546,21 @@ export default function CharityDeliverySystem() {
 
         // address + postcode (bold)
         ctx.fillStyle = '#111111';
-        ctx.font = 'bold 15px Arial, sans-serif';
+        ctx.font = 'bold 19px Arial, sans-serif';
         const addrLine = (a.fullAddress || key) + (a.postcode ? '  ' + a.postcode : '');
         ctx.fillText(fit(addrLine, width - 32), 16, y);
 
         // quantities, full words
-        ctx.font = '14px Arial, sans-serif';
-        ctx.fillStyle = '#333333';
+        ctx.font = 'bold 17px Arial, sans-serif';
+        ctx.fillStyle = '#222222';
         const qty = 'Chicken: ' + c.chicken + '    Meat: ' + c.meat + (showPies ? '    Pies: ' + c.pies : '');
-        ctx.fillText(qty, 16, y + 22);
+        ctx.fillText(qty, 16, y + 28);
 
         // notes
         if (a.notes) {
-          ctx.font = 'bold italic 13px Arial, sans-serif';
+          ctx.font = 'bold italic 16px Arial, sans-serif';
           ctx.fillStyle = '#c0392b';
-          ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 44);
+          ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 52);
         }
 
         ctx.strokeStyle = '#e2e2e2';
@@ -1783,6 +1783,130 @@ export default function CharityDeliverySystem() {
       reject(e);
     }
   });
+
+  // Lazy-load jsPDF from CDN (so no package.json change is needed for the single-file workflow).
+  const loadJsPDF = () => new Promise((resolve, reject) => {
+    if (window.jspdf && window.jspdf.jsPDF) { resolve(window.jspdf.jsPDF); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+    s.onload = () => {
+      if (window.jspdf && window.jspdf.jsPDF) resolve(window.jspdf.jsPDF);
+      else reject(new Error('jsPDF failed to load'));
+    };
+    s.onerror = () => reject(new Error('Could not load jsPDF'));
+    document.body.appendChild(s);
+  });
+
+  // Build a crisp, vector A4-portrait PDF of all deliveries in two columns. PDFs aren't
+  // recompressed by WhatsApp (sent as a document), so text stays sharp.
+  const buildAllPdf = async () => {
+    const JsPDF = await loadJsPDF();
+    const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    const pageW = 210, pageH = 297, margin = 10;
+    const colGap = 8;
+    const colW = (pageW - margin * 2 - colGap) / 2; // two columns
+    const colX = [margin, margin + colW + colGap];
+    const showPiesGlobal = (() => {
+      let p = 0;
+      Object.keys(allocations).forEach(d => { if (d !== '__unassigned') (allocations[d] || []).forEach(k => { p += (calculatedAddresses[k] || {}).pies || 0; }); });
+      return p > 0;
+    })();
+
+    const driverNames = Object.keys(allocations).filter((d) => d !== '__unassigned' && allocations[d] && allocations[d].length > 0);
+
+    // Header
+    doc.setFillColor(27, 94, 32); doc.rect(0, 0, pageW, 20, 'F');
+    doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
+    doc.text('ALL DELIVERIES', margin, 9);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+    doc.text('Week of ' + formatUKDate(selectedDate) + '  •  ' + driverNames.length + ' drivers', margin, 15);
+
+    let col = 0;
+    let y = [26, 26];
+    const lineH = 4.6;
+
+    const ensureSpace = (need, c) => {
+      if (y[c] + need <= pageH - margin) return c;
+      // try the other column
+      const other = c === 0 ? 1 : 0;
+      if (y[other] + need <= pageH - margin) return other;
+      // both full -> new page
+      doc.addPage(); y[0] = margin; y[1] = margin; return 0;
+    };
+
+    driverNames.forEach((d) => {
+      const keys = orderStops(allocations[d]);
+      let dC = 0, dM = 0, dP = 0;
+      keys.forEach((k) => { const q = calculatedAddresses[k] || {}; dC += q.chicken || 0; dM += q.meat || 0; dP += q.pies || 0; });
+      const blockHeight = 10 + keys.length * (lineH * 2 + 2) + 8;
+      col = ensureSpace(28, col); // ensure room for at least the header + a couple rows
+      const x = colX[col];
+
+      // red divider + driver header
+      doc.setDrawColor(198, 40, 40); doc.setLineWidth(0.8);
+      doc.line(x, y[col], x + colW, y[col]); y[col] += 3;
+      doc.setTextColor(34); doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
+      doc.text(d, x, y[col]); 
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(100);
+      doc.text(keys.length + ' stops', x + colW, y[col], { align: 'right' });
+      y[col] += 5;
+      doc.setDrawColor(60); doc.setLineWidth(0.3); doc.line(x, y[col], x + colW, y[col]); y[col] += 3;
+
+      keys.forEach((key) => {
+        col = ensureSpace(lineH * 2 + 3, col);
+        const cx = colX[col];
+        const a = addresses[key] || {};
+        const q = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+        doc.setTextColor(17); doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+        const addr = (a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : '');
+        doc.text(doc.splitTextToSize(addr, colW)[0], cx, y[col]); y[col] += lineH;
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(50);
+        doc.text('Chicken: ' + q.chicken + '   Meat: ' + q.meat + (showPiesGlobal ? '   Pies: ' + q.pies : ''), cx, y[col]); y[col] += lineH;
+        if (a.notes) {
+          doc.setFont('helvetica', 'bolditalic'); doc.setFontSize(8); doc.setTextColor(192, 57, 43);
+          doc.text(doc.splitTextToSize('Note: ' + a.notes, colW)[0], cx, y[col]); y[col] += lineH;
+        }
+        doc.setDrawColor(225); doc.setLineWidth(0.2); doc.line(cx, y[col] - 1, cx + colW, y[col] - 1); y[col] += 1.5;
+      });
+
+      // totals
+      col = ensureSpace(8, col);
+      const tx = colX[col];
+      doc.setFillColor(238, 246, 238); doc.setDrawColor(76, 175, 80); doc.setLineWidth(0.4);
+      doc.rect(tx, y[col], colW, 7, 'FD');
+      doc.setTextColor(17); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
+      doc.text('Collect — C:' + dC + '  M:' + dM + (showPiesGlobal ? '  P:' + dP : '') + '   (Stops: ' + keys.length + ')', tx + 2, y[col] + 4.6);
+      y[col] += 11;
+    });
+
+    return doc;
+  };
+
+  const shareAllPdf = async () => {
+    try {
+      const doc = await buildAllPdf();
+      const blob = doc.output('blob');
+      const file = new File([blob], 'all-deliveries.pdf', { type: 'application/pdf' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], text: 'All deliveries — week of ' + formatUKDate(selectedDate) });
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a'); link.href = url; link.download = file.name; link.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Could not create the PDF: ' + e.message);
+    }
+  };
+
+  const downloadAllPdf = async () => {
+    try {
+      const doc = await buildAllPdf();
+      doc.save('all-deliveries.pdf');
+    } catch (e) {
+      alert('Could not create the PDF: ' + e.message);
+    }
+  };
 
   const shareAllImage = async () => {
     try {
@@ -2755,11 +2879,13 @@ export default function CharityDeliverySystem() {
                 <strong>Approved plan for {formatUKDate(selectedDate)}.</strong> Tap Share on each driver to send their list (image + route link) via WhatsApp.
               </div>
               <div style={{ border: '2px solid #1b5e20', borderRadius: '6px', padding: '12px', marginBottom: '18px', background: '#f1f8e9' }}>
-                <strong>📋 All deliveries (one image)</strong>
-                <p style={{ fontSize: '12px', color: '#666', margin: '4px 0 10px 0' }}>A single image with every driver's list and an overall totals header — useful for your own overview or the butcher.</p>
+                <strong>📋 All deliveries</strong>
+                <p style={{ fontSize: '12px', color: '#666', margin: '4px 0 10px 0' }}>Every driver's list with an overall totals header — for your own overview or the butcher. The <strong>PDF</strong> stays sharp on WhatsApp (sent as a document); the image is a quick photo share.</p>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <button onClick={shareAllImage} style={{ padding: '10px 18px', backgroundColor: '#1b5e20', color: 'white', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>📲 Share all</button>
-                  <button onClick={downloadAllImage} style={{ padding: '10px 18px', backgroundColor: '#607d8b', color: 'white', border: 'none', cursor: 'pointer' }}>⬇ Download all</button>
+                  <button onClick={shareAllPdf} style={{ padding: '10px 18px', backgroundColor: '#1b5e20', color: 'white', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>📄 Share PDF</button>
+                  <button onClick={downloadAllPdf} style={{ padding: '10px 18px', backgroundColor: '#37474f', color: 'white', border: 'none', cursor: 'pointer' }}>⬇ Download PDF</button>
+                  <button onClick={shareAllImage} style={{ padding: '10px 18px', backgroundColor: '#558b2f', color: 'white', border: 'none', cursor: 'pointer' }}>📲 Share image</button>
+                  <button onClick={downloadAllImage} style={{ padding: '10px 18px', backgroundColor: '#607d8b', color: 'white', border: 'none', cursor: 'pointer' }}>⬇ Image</button>
                 </div>
               </div>
               {Object.keys(allocations).filter(d => d !== '__unassigned' && allocations[d] && allocations[d].length > 0).map((driver) => {
