@@ -736,6 +736,13 @@ export default function CharityDeliverySystem() {
     newPhones[name] = editingDriverPhone.trim();
     setDrivers(newDrivers);
     setDriverPhones(newPhones);
+    // Write immediately to Firebase (don't rely on the debounced save) so the poll
+    // roster always has the latest drivers and numbers.
+    if (user && db) {
+      set(ref(db, `users/${user.uid}/drivers`), newDrivers).catch((e) => console.error('driver save', e));
+      set(ref(db, `users/${user.uid}/driverPhones`), newPhones).catch((e) => console.error('phone save', e));
+    }
+    updateActivePollRoster(newDrivers, newPhones);
     setEditingDriverName('');
     setEditingDriverPhone('');
     setEditingDriverOriginal(null);
@@ -750,6 +757,11 @@ export default function CharityDeliverySystem() {
       const newPhones = { ...driverPhones };
       delete newPhones[name];
       setDriverPhones(newPhones);
+      if (user && db) {
+        set(ref(db, `users/${user.uid}/drivers`), newDrivers).catch((e) => console.error('driver save', e));
+        set(ref(db, `users/${user.uid}/driverPhones`), newPhones).catch((e) => console.error('phone save', e));
+      }
+      updateActivePollRoster(newDrivers, newPhones);
     }
   };
 
@@ -771,6 +783,23 @@ export default function CharityDeliverySystem() {
       hash = ((hash << 5) + hash + normalised.charCodeAt(i)) >>> 0;
     }
     return 'p' + hash.toString(16);
+  };
+
+  // Build the roster (phone-hash -> driver name) from a given drivers/phones set.
+  const buildRoster = (driversObj, phonesObj) => {
+    const roster = {};
+    Object.keys(driversObj).forEach((name) => {
+      const phone = phonesObj[name];
+      if (phone && normalisePhone(phone)) roster[hashPhone(phone)] = name;
+    });
+    return roster;
+  };
+
+  // Keep the live poll's roster in sync so the SAME poll link works after driver changes.
+  const updateActivePollRoster = (driversObj, phonesObj) => {
+    if (!activePollId || !db) return;
+    const roster = buildRoster(driversObj, phonesObj);
+    set(ref(db, `polls/${activePollId}/roster`), roster).catch((e) => console.error('roster sync', e));
   };
 
   const openPollForVoting = () => {
