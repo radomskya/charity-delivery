@@ -2482,7 +2482,7 @@ export default function CharityDeliverySystem() {
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
                               <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong> <a href={singleMapLink(key)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', textDecoration: 'none' }}>🗺️</a></div>
-                              {addresses[key] && addresses[key].preferredDriver === driver && <div style={{ fontSize: '12px', color: '#2e7d32', fontWeight: 'bold', marginTop: '2px' }}>⭐ Preferred address (with their preferred driver)</div>}
+                              {addresses[key] && addresses[key].preferredDriver === driver && <div style={{ fontSize: '12px', color: '#2e7d32', fontWeight: 'bold', marginTop: '2px' }}>⭐ Preferred address</div>}
                               {addresses[key] && addresses[key].preferredDriver && addresses[key].preferredDriver !== driver && availableDrivers[addresses[key].preferredDriver] && <div style={{ display: 'inline-block', marginTop: '4px', backgroundColor: '#f3e5f5', border: '1.5px solid #6a1b9a', borderRadius: '4px', padding: '3px 8px', fontSize: '13px', color: '#6a1b9a', fontWeight: 'bold' }}>↪ Preferred driver: {addresses[key].preferredDriver} (available) — placed here instead</div>}
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
@@ -2492,7 +2492,22 @@ export default function CharityDeliverySystem() {
                             </div>
                             {!allocationApproved && (
                               <select value={driver} onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
-                                {Object.keys(drivers).filter(d => availableDrivers[d]).map(d => (<option key={d} value={d}>{d}</option>))}
+                                {Object.keys(drivers).filter(d => availableDrivers[d]).map(d => {
+                                  // distance from this address to the driver's NEAREST stop (how close their round is)
+                                  let nearest = null;
+                                  (proposedAllocation[d] || []).forEach(k2 => {
+                                    if (k2 === key) return;
+                                    const m = milesBetween(key, k2);
+                                    if (m !== null && (nearest === null || m < nearest)) nearest = m;
+                                  });
+                                  return { d, nearest };
+                                }).sort((a, b) => {
+                                  if (a.nearest === null) return 1;
+                                  if (b.nearest === null) return -1;
+                                  return a.nearest - b.nearest;
+                                }).map(({ d, nearest }) => (
+                                  <option key={d} value={d}>{d}{nearest !== null ? ` (${nearest.toFixed(1)} mi)` : ''}{d === driver ? ' — current' : ''}</option>
+                                ))}
                                 <option value="__unassigned">— unassign —</option>
                               </select>
                             )}
