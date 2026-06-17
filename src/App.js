@@ -1204,6 +1204,52 @@ export default function CharityDeliverySystem() {
       result[minD].push(bestKey);
     }
 
+    // COMPACTNESS PASS: swap pairs of addresses between drivers when it reduces total
+    // distance-to-centroid, without changing counts. This tightens scattered rounds
+    // (e.g. an address that landed far from its driver) while keeping balance intact.
+    const distToCentroid = (key, driver) => {
+      const c = cent(driver);
+      const a = addrInfo(key);
+      if (!c || typeof a.lat !== 'number') return 0;
+      return dist2(a, c);
+    };
+    const canHave = (key, driver) => {
+      const a = addrInfo(key);
+      if (((a.avoidDrivers)||[]).includes(driver)) return false;
+      // don't move a preferred address away from its (available) preferred driver via swap
+      if (a.preferredDriver && a.preferredDriver !== driver && avail.includes(a.preferredDriver) && a.preferredDriver === driver) return false;
+      return true;
+    };
+    let swapGuard = 0;
+    while (swapGuard++ < 300) {
+      let bestImprove = 0.0000001, bestSwap = null;
+      for (let i = 0; i < avail.length; i++) {
+        for (let j = i + 1; j < avail.length; j++) {
+          const d1 = avail[i], d2 = avail[j];
+          result[d1].forEach((k1) => {
+            const a1 = addrInfo(k1);
+            if (a1.preferredDriver === d1 && avail.includes(d1)) return; // keep preferred where it belongs
+            if (((a1.avoidDrivers)||[]).includes(d2)) return;
+            result[d2].forEach((k2) => {
+              const a2 = addrInfo(k2);
+              if (a2.preferredDriver === d2 && avail.includes(d2)) return;
+              if (((a2.avoidDrivers)||[]).includes(d1)) return;
+              if (typeof a1.lat !== 'number' || typeof a2.lat !== 'number') return;
+              // current cost vs swapped cost (using current centroids as approximation)
+              const before = distToCentroid(k1, d1) + distToCentroid(k2, d2);
+              const after = distToCentroid(k1, d2) + distToCentroid(k2, d1);
+              const improve = before - after;
+              if (improve > bestImprove) { bestImprove = improve; bestSwap = { d1, d2, k1, k2 }; }
+            });
+          });
+        }
+      }
+      if (!bestSwap) break;
+      const { d1, d2, k1, k2 } = bestSwap;
+      result[d1] = result[d1].filter(x => x !== k1); result[d1].push(k2);
+      result[d2] = result[d2].filter(x => x !== k2); result[d2].push(k1);
+    }
+
     if (unassigned.length > 0) result.__unassigned = unassigned;
     setProposedAllocation(result);
     setAllocationApproved(false);
@@ -2301,7 +2347,11 @@ export default function CharityDeliverySystem() {
                   return (
                     <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0', flexWrap: 'wrap' }}>
                       {availabilityEditMode && <input type="checkbox" checked={ticked} onChange={() => toggleDriverAvailable(name)} style={{ width: '18px', height: '18px' }} />}
-                      {!availabilityEditMode && <span style={{ width: '16px', textAlign: 'center', color: ticked ? '#4CAF50' : '#ccc' }}>{ticked ? '✓' : '○'}</span>}
+                      {!availabilityEditMode && (() => {
+                        if (ticked) return <span style={{ width: '16px', textAlign: 'center', color: '#4CAF50', fontWeight: 'bold' }}>✓</span>;
+                        if (voted === false) return <span style={{ width: '16px', textAlign: 'center', color: '#c62828', fontWeight: 'bold' }}>✗</span>;
+                        return <span style={{ width: '16px', textAlign: 'center', color: '#ccc' }}>○</span>;
+                      })()}
                       <strong>{name}</strong>
                       {voted === true && !byAdmin && <span style={{ fontSize: '12px', color: 'green' }}>✓ voted available</span>}
                       {voted === false && !byAdmin && <span style={{ fontSize: '12px', color: '#c62828' }}>✗ voted not available</span>}
