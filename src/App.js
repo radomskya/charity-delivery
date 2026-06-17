@@ -1486,10 +1486,47 @@ export default function CharityDeliverySystem() {
       const scale = 2; // retina-quality
       const width = 620;
       const headerH = 96;
-      const rowH = 78;
       const totalsH = 70;
       const footerH = 20;
-      const height = headerH + keys.length * rowH + totalsH + footerH;
+
+      // We need ctx early to measure text for wrapping, so create canvas first.
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      // Word-wrap a string to fit maxW, returning an array of lines.
+      const wrapText = (text, maxW) => {
+        const words = String(text || '').split(/\s+/);
+        const lines = [];
+        let line = '';
+        words.forEach((w) => {
+          const test = line ? line + ' ' + w : w;
+          if (ctx.measureText(test).width <= maxW || !line) {
+            line = test;
+          } else {
+            lines.push(line); line = w;
+          }
+        });
+        if (line) lines.push(line);
+        return lines;
+      };
+
+      // Pre-compute each row's note lines + height. Base row holds address (y) and
+      // quantities (y+28). Notes start at y+52, each extra wrapped line adds ~20px.
+      const noteFont = 'bold italic 16px Arial, sans-serif';
+      const baseRowH = 62;       // address + quantities, no note
+      const noteLineH = 20;
+      const rowInfo = keys.map((key) => {
+        const a = addresses[key] || {};
+        let noteLines = [];
+        if (a.notes) {
+          ctx.font = noteFont;
+          noteLines = wrapText('Note: ' + a.notes, width - 32);
+        }
+        const h = baseRowH + (noteLines.length > 0 ? (10 + noteLines.length * noteLineH) : 0) + 12;
+        return { key, noteLines, h };
+      });
+      const bodyH = rowInfo.reduce((s, r) => s + r.h, 0);
+      const height = headerH + bodyH + totalsH + footerH;
 
       // compute totals for collection
       let totC = 0, totM = 0, totP = 0;
@@ -1499,10 +1536,8 @@ export default function CharityDeliverySystem() {
       });
       const showPies = totP > 0; // only show the Pies column if any are ordered this round
 
-      const canvas = document.createElement('canvas');
       canvas.width = width * scale;
       canvas.height = height * scale;
-      const ctx = canvas.getContext('2d');
       ctx.scale(scale, scale);
 
       ctx.fillStyle = '#ffffff';
@@ -1535,13 +1570,15 @@ export default function CharityDeliverySystem() {
       };
 
       let y = headerH + 10;
-      keys.forEach((key, idx) => {
+      rowInfo.forEach((info, idx) => {
+        const key = info.key;
         const a = addresses[key] || {};
         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+        const rH = info.h;
 
         if (idx % 2 === 1) {
           ctx.fillStyle = '#e3edf7';
-          ctx.fillRect(8, y - 6, width - 16, rowH);
+          ctx.fillRect(8, y - 6, width - 16, rH);
         }
 
         // address + postcode (bold)
@@ -1556,21 +1593,22 @@ export default function CharityDeliverySystem() {
         const qty = 'Chicken: ' + c.chicken + '    Meat: ' + c.meat + (showPies ? '    Pies: ' + c.pies : '');
         ctx.fillText(qty, 16, y + 28);
 
-        // notes
-        if (a.notes) {
+        // notes (wrapped onto as many lines as needed)
+        if (info.noteLines.length > 0) {
           ctx.font = 'bold italic 16px Arial, sans-serif';
           ctx.fillStyle = '#c0392b';
-          ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 52);
+          let ny = y + 52;
+          info.noteLines.forEach((ln) => { ctx.fillText(ln, 16, ny); ny += 20; });
         }
 
         ctx.strokeStyle = '#e2e2e2';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(16, y + rowH - 8);
-        ctx.lineTo(width - 16, y + rowH - 8);
+        ctx.moveTo(16, y + rH - 8);
+        ctx.lineTo(width - 16, y + rH - 8);
         ctx.stroke();
 
-        y += rowH;
+        y += rH;
       });
 
       // TOTALS box (for collection)
@@ -1814,15 +1852,57 @@ export default function CharityDeliverySystem() {
 
     const driverNames = Object.keys(allocations).filter((d) => d !== '__unassigned' && allocations[d] && allocations[d].length > 0);
 
-    // Header
+    // Header band
     doc.setFillColor(27, 94, 32); doc.rect(0, 0, pageW, 20, 'F');
     doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
     doc.text('ALL DELIVERIES', margin, 9);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
     doc.text('Week of ' + formatUKDate(selectedDate) + '  •  ' + driverNames.length + ' drivers', margin, 15);
 
+    // Grand totals + per-driver figures
+    let gStops = 0, gC = 0, gM = 0, gP = 0;
+    const perDriver = {};
+    driverNames.forEach((d) => {
+      let s = 0, c = 0, m = 0, p = 0;
+      (allocations[d] || []).forEach((k) => { const q = calculatedAddresses[k] || {}; s += 1; c += q.chicken || 0; m += q.meat || 0; p += q.pies || 0; });
+      perDriver[d] = { stops: s, chicken: c, meat: m, pies: p };
+      gStops += s; gC += c; gM += m; gP += p;
+    });
+
+    // Grand totals line under the header band
+    let hy = 26;
+    doc.setTextColor(17); doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+    doc.text('Totals — Stops: ' + gStops + '    Chicken: ' + gC + '    Meat: ' + gM + (showPiesGlobal ? '    Pies: ' + gP : ''), margin, hy);
+    hy += 6;
+
+    // Per-driver summary table
+    const sCols = showPiesGlobal
+      ? [margin, margin + 70, margin + 100, margin + 130, margin + 160]
+      : [margin, margin + 80, margin + 120, margin + 160];
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(60);
+    doc.text('Driver', sCols[0], hy);
+    doc.text('Stops', sCols[1], hy);
+    doc.text('Chicken', sCols[2], hy);
+    doc.text('Meat', sCols[3], hy);
+    if (showPiesGlobal) doc.text('Pies', sCols[4], hy);
+    hy += 1.5;
+    doc.setDrawColor(80); doc.setLineWidth(0.3); doc.line(margin, hy, pageW - margin, hy); hy += 4;
+    doc.setFont('helvetica', 'normal'); doc.setTextColor(20);
+    driverNames.forEach((d) => {
+      const t = perDriver[d];
+      doc.text(String(d).slice(0, 28), sCols[0], hy);
+      doc.text(String(t.stops), sCols[1], hy);
+      doc.text(String(t.chicken), sCols[2], hy);
+      doc.text(String(t.meat), sCols[3], hy);
+      if (showPiesGlobal) doc.text(String(t.pies), sCols[4], hy);
+      hy += 4.4;
+    });
+    hy += 2;
+    doc.setDrawColor(120); doc.setLineWidth(0.4); doc.line(margin, hy, pageW - margin, hy);
+    hy += 8; // breathing room before the first driver's red divider
+
     let col = 0;
-    let y = [26, 26];
+    let y = [hy, hy];
     const lineH = 4.6;
 
     const ensureSpace = (need, c) => {
@@ -1831,7 +1911,7 @@ export default function CharityDeliverySystem() {
       const other = c === 0 ? 1 : 0;
       if (y[other] + need <= pageH - margin) return other;
       // both full -> new page
-      doc.addPage(); y[0] = margin; y[1] = margin; return 0;
+      doc.addPage(); y[0] = margin + 4; y[1] = margin + 4; return 0;
     };
 
     driverNames.forEach((d) => {
@@ -1842,9 +1922,11 @@ export default function CharityDeliverySystem() {
       col = ensureSpace(28, col); // ensure room for at least the header + a couple rows
       const x = colX[col];
 
+      // space above the red divider so it isn't crammed against the previous block
+      y[col] += 5;
       // red divider + driver header
       doc.setDrawColor(198, 40, 40); doc.setLineWidth(0.8);
-      doc.line(x, y[col], x + colW, y[col]); y[col] += 3;
+      doc.line(x, y[col], x + colW, y[col]); y[col] += 5;
       doc.setTextColor(34); doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
       doc.text(d, x, y[col]); 
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(100);
