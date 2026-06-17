@@ -1515,15 +1515,23 @@ export default function CharityDeliverySystem() {
       const noteFont = 'bold italic 16px Arial, sans-serif';
       const baseRowH = 62;       // address + quantities, no note
       const noteLineH = 20;
+      const addrFont = 'bold 19px Arial, sans-serif';
+      const addrLineH = 24;
       const rowInfo = keys.map((key) => {
         const a = addresses[key] || {};
+        // wrap the address (incl postcode) onto as many lines as needed
+        ctx.font = addrFont;
+        const addrText = (a.fullAddress || key) + (a.postcode ? '  ' + a.postcode : '');
+        const addrLines = wrapText(addrText, width - 32);
         let noteLines = [];
         if (a.notes) {
           ctx.font = noteFont;
           noteLines = wrapText('Note: ' + a.notes, width - 32);
         }
-        const h = baseRowH + (noteLines.length > 0 ? (10 + noteLines.length * noteLineH) : 0) + 12;
-        return { key, noteLines, h };
+        // base = first address line + quantities; extra address lines and notes add height
+        const extraAddr = (addrLines.length - 1) * addrLineH;
+        const h = baseRowH + extraAddr + (noteLines.length > 0 ? (10 + noteLines.length * noteLineH) : 0) + 12;
+        return { key, addrLines, noteLines, h };
       });
       const bodyH = rowInfo.reduce((s, r) => s + r.h, 0);
       const height = headerH + bodyH + totalsH + footerH;
@@ -1581,23 +1589,24 @@ export default function CharityDeliverySystem() {
           ctx.fillRect(8, y - 6, width - 16, rH);
         }
 
-        // address + postcode (bold)
+        // address + postcode (bold), wrapped onto as many lines as needed
         ctx.fillStyle = '#111111';
         ctx.font = 'bold 19px Arial, sans-serif';
-        const addrLine = (a.fullAddress || key) + (a.postcode ? '  ' + a.postcode : '');
-        ctx.fillText(fit(addrLine, width - 32), 16, y);
+        let ay = y;
+        info.addrLines.forEach((ln) => { ctx.fillText(ln, 16, ay); ay += 24; });
 
-        // quantities, full words
+        // quantities, full words — positioned just below the (possibly multi-line) address
         ctx.font = 'bold 17px Arial, sans-serif';
         ctx.fillStyle = '#222222';
         const qty = 'Chicken: ' + c.chicken + '    Meat: ' + c.meat + (showPies ? '    Pies: ' + c.pies : '');
-        ctx.fillText(qty, 16, y + 28);
+        const qtyY = y + (info.addrLines.length - 1) * 24 + 28;
+        ctx.fillText(qty, 16, qtyY);
 
-        // notes (wrapped onto as many lines as needed)
+        // notes (wrapped onto as many lines as needed), below the quantities
         if (info.noteLines.length > 0) {
           ctx.font = 'bold italic 16px Arial, sans-serif';
           ctx.fillStyle = '#c0392b';
-          let ny = y + 52;
+          let ny = qtyY + 24;
           info.noteLines.forEach((ln) => { ctx.fillText(ln, 16, ny); ny += 20; });
         }
 
@@ -1875,30 +1884,34 @@ export default function CharityDeliverySystem() {
     doc.text('Totals — Stops: ' + gStops + '    Chicken: ' + gC + '    Meat: ' + gM + (showPiesGlobal ? '    Pies: ' + gP : ''), margin, hy);
     hy += 6;
 
-    // Per-driver summary table
+    // Per-driver summary table — compact columns, with zebra shading for readability.
     const sCols = showPiesGlobal
-      ? [margin, margin + 70, margin + 100, margin + 130, margin + 160]
-      : [margin, margin + 80, margin + 120, margin + 160];
+      ? [margin + 2, margin + 58, margin + 78, margin + 98, margin + 118]
+      : [margin + 2, margin + 58, margin + 80, margin + 102];
+    const tableRight = (showPiesGlobal ? margin + 130 : margin + 114);
+    const sRowH = 5;
     doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(60);
     doc.text('Driver', sCols[0], hy);
     doc.text('Stops', sCols[1], hy);
-    doc.text('Chicken', sCols[2], hy);
+    doc.text('Chick', sCols[2], hy);
     doc.text('Meat', sCols[3], hy);
     if (showPiesGlobal) doc.text('Pies', sCols[4], hy);
     hy += 1.5;
-    doc.setDrawColor(80); doc.setLineWidth(0.3); doc.line(margin, hy, pageW - margin, hy); hy += 4;
+    doc.setDrawColor(80); doc.setLineWidth(0.3); doc.line(margin, hy, tableRight, hy); hy += 3.5;
     doc.setFont('helvetica', 'normal'); doc.setTextColor(20);
-    driverNames.forEach((d) => {
+    driverNames.forEach((d, ri) => {
+      if (ri % 2 === 1) { doc.setFillColor(238, 240, 244); doc.rect(margin, hy - 3.4, tableRight - margin, sRowH, 'F'); }
       const t = perDriver[d];
-      doc.text(String(d).slice(0, 28), sCols[0], hy);
+      doc.setTextColor(20);
+      doc.text(String(d).slice(0, 26), sCols[0], hy);
       doc.text(String(t.stops), sCols[1], hy);
       doc.text(String(t.chicken), sCols[2], hy);
       doc.text(String(t.meat), sCols[3], hy);
       if (showPiesGlobal) doc.text(String(t.pies), sCols[4], hy);
-      hy += 4.4;
+      hy += sRowH;
     });
-    hy += 2;
-    doc.setDrawColor(120); doc.setLineWidth(0.4); doc.line(margin, hy, pageW - margin, hy);
+    hy += 1;
+    doc.setDrawColor(120); doc.setLineWidth(0.4); doc.line(margin, hy, tableRight, hy);
     hy += 8; // breathing room before the first driver's red divider
 
     let col = 0;
@@ -1935,18 +1948,25 @@ export default function CharityDeliverySystem() {
       doc.setDrawColor(60); doc.setLineWidth(0.3); doc.line(x, y[col], x + colW, y[col]); y[col] += 3;
 
       keys.forEach((key) => {
-        col = ensureSpace(lineH * 2 + 3, col);
-        const cx = colX[col];
         const a = addresses[key] || {};
         const q = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
-        doc.setTextColor(17); doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
         const addr = (a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : '');
-        doc.text(doc.splitTextToSize(addr, colW)[0], cx, y[col]); y[col] += lineH;
+        // pre-wrap to know how tall this stop will be, so it isn't split across a column break
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+        const addrLines = doc.splitTextToSize(addr, colW);
+        let noteLines = [];
+        if (a.notes) { doc.setFont('helvetica', 'bolditalic'); doc.setFontSize(8); noteLines = doc.splitTextToSize('Note: ' + a.notes, colW); }
+        const stopH = addrLines.length * lineH + lineH + noteLines.length * (lineH - 0.4) + 3;
+        col = ensureSpace(stopH, col);
+        const cx = colX[col];
+
+        doc.setTextColor(17); doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+        addrLines.forEach((ln) => { doc.text(ln, cx, y[col]); y[col] += lineH; });
         doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(50);
         doc.text('Chicken: ' + q.chicken + '   Meat: ' + q.meat + (showPiesGlobal ? '   Pies: ' + q.pies : ''), cx, y[col]); y[col] += lineH;
-        if (a.notes) {
+        if (noteLines.length > 0) {
           doc.setFont('helvetica', 'bolditalic'); doc.setFontSize(8); doc.setTextColor(192, 57, 43);
-          doc.text(doc.splitTextToSize('Note: ' + a.notes, colW)[0], cx, y[col]); y[col] += lineH;
+          noteLines.forEach((ln) => { doc.text(ln, cx, y[col]); y[col] += (lineH - 0.4); });
         }
         doc.setDrawColor(225); doc.setLineWidth(0.2); doc.line(cx, y[col] - 1, cx + colW, y[col] - 1); y[col] += 1.5;
       });
@@ -1957,7 +1977,7 @@ export default function CharityDeliverySystem() {
       doc.setFillColor(238, 246, 238); doc.setDrawColor(76, 175, 80); doc.setLineWidth(0.4);
       doc.rect(tx, y[col], colW, 7, 'FD');
       doc.setTextColor(17); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
-      doc.text('Collect — C:' + dC + '  M:' + dM + (showPiesGlobal ? '  P:' + dP : '') + '   (Stops: ' + keys.length + ')', tx + 2, y[col] + 4.6);
+      doc.text('Chicken: ' + dC + '   Meat: ' + dM + (showPiesGlobal ? '   Pies: ' + dP : '') + '   (Stops: ' + keys.length + ')', tx + 2, y[col] + 4.6);
       y[col] += 11;
     });
 
