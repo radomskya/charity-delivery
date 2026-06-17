@@ -1364,6 +1364,159 @@ export default function CharityDeliverySystem() {
     }
   });
 
+  // Build ONE image containing every driver's card stacked, with an overall totals header.
+  const rasteriseAllToPng = () => new Promise((resolve, reject) => {
+    try {
+      const scale = 2;
+      const width = 620;
+      const rowH = 70;
+      const driverHeaderH = 70;
+      const driverTotalsH = 64;
+      const driverGap = 24;
+      const grandHeaderH = 110;
+
+      const driverNames = Object.keys(allocations).filter((d) => d !== '__unassigned' && allocations[d] && allocations[d].length > 0);
+
+      // grand totals
+      let gStops = 0, gC = 0, gM = 0, gP = 0;
+      driverNames.forEach((d) => {
+        (allocations[d] || []).forEach((key) => {
+          const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+          gStops += 1; gC += c.chicken; gM += c.meat; gP += c.pies;
+        });
+      });
+      const showPies = gP > 0;
+
+      // total height
+      let totalH = grandHeaderH;
+      driverNames.forEach((d) => {
+        totalH += driverHeaderH + (allocations[d].length * rowH) + driverTotalsH + driverGap;
+      });
+      totalH += 20;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width * scale;
+      canvas.height = totalH * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, totalH);
+      ctx.textBaseline = 'top';
+
+      const fit = (text, maxW) => {
+        text = String(text || '');
+        if (ctx.measureText(text).width <= maxW) return text;
+        while (text.length > 1 && ctx.measureText(text + '…').width > maxW) text = text.slice(0, -1);
+        return text + '…';
+      };
+
+      // GRAND HEADER
+      ctx.fillStyle = '#1b5e20';
+      ctx.fillRect(0, 0, width, grandHeaderH);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 22px Arial, sans-serif';
+      ctx.fillText('ALL DELIVERIES', 16, 14);
+      ctx.font = '14px Arial, sans-serif';
+      ctx.fillText('Week of ' + formatUKDate(selectedDate) + '  •  ' + driverNames.length + ' drivers', 16, 44);
+      ctx.font = 'bold 16px Arial, sans-serif';
+      ctx.fillText('Stops: ' + gStops + '      Chicken: ' + gC + '      Meat: ' + gM + (showPies ? '      Pies: ' + gP : ''), 16, 72);
+
+      let y = grandHeaderH + 16;
+
+      driverNames.forEach((d) => {
+        const keys = orderStops(allocations[d]);
+        let dC = 0, dM = 0, dP = 0;
+        keys.forEach((key) => { const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 }; dC += c.chicken; dM += c.meat; dP += c.pies; });
+
+        // driver header
+        ctx.fillStyle = '#222222';
+        ctx.font = 'bold 18px Arial, sans-serif';
+        ctx.fillText(d, 16, y);
+        ctx.font = '13px Arial, sans-serif';
+        ctx.fillStyle = '#666666';
+        ctx.fillText(keys.length + ' stops', 16, y + 26);
+        ctx.strokeStyle = '#333333';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(16, y + driverHeaderH - 8);
+        ctx.lineTo(width - 16, y + driverHeaderH - 8);
+        ctx.stroke();
+        y += driverHeaderH;
+
+        keys.forEach((key, idx) => {
+          const a = addresses[key] || {};
+          const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+          if (idx % 2 === 1) { ctx.fillStyle = '#e3edf7'; ctx.fillRect(8, y - 6, width - 16, rowH); }
+          ctx.fillStyle = '#111111';
+          ctx.font = 'bold 15px Arial, sans-serif';
+          ctx.fillText(fit((a.fullAddress || key) + (a.postcode ? '  ' + a.postcode : ''), width - 32), 16, y);
+          ctx.font = '14px Arial, sans-serif';
+          ctx.fillStyle = '#333333';
+          ctx.fillText('Chicken: ' + c.chicken + '    Meat: ' + c.meat + (showPies ? '    Pies: ' + c.pies : ''), 16, y + 22);
+          if (a.notes) {
+            ctx.font = 'italic 12px Arial, sans-serif';
+            ctx.fillStyle = '#c0392b';
+            ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 44);
+          }
+          ctx.strokeStyle = '#e2e2e2';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(16, y + rowH - 8);
+          ctx.lineTo(width - 16, y + rowH - 8);
+          ctx.stroke();
+          y += rowH;
+        });
+
+        // per-driver totals box
+        y += 4;
+        ctx.fillStyle = '#eef6ee';
+        ctx.fillRect(8, y, width - 16, driverTotalsH - 12);
+        ctx.strokeStyle = '#4CAF50';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(8, y, width - 16, driverTotalsH - 12);
+        ctx.fillStyle = '#111111';
+        ctx.font = 'bold 15px Arial, sans-serif';
+        ctx.fillText('Collect — Chicken: ' + dC + '   Meat: ' + dM + (showPies ? '   Pies: ' + dP : '') + '   (Stops: ' + keys.length + ')', 20, y + 12);
+        y += driverTotalsH - 12 + driverGap;
+      });
+
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob); else reject(new Error('Could not create image'));
+      }, 'image/png');
+    } catch (e) {
+      reject(e);
+    }
+  });
+
+  const shareAllImage = async () => {
+    try {
+      const blob = await rasteriseAllToPng();
+      const file = new File([blob], 'all-deliveries.png', { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], text: 'All deliveries — week of ' + formatUKDate(selectedDate) });
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = file.name; link.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Could not generate the combined image: ' + e.message);
+    }
+  };
+
+  const downloadAllImage = async () => {
+    try {
+      const blob = await rasteriseAllToPng();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = 'all-deliveries.png'; link.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Could not generate the combined image: ' + e.message);
+    }
+  };
+
   const shareDriver = async (driverName, keys) => {
     const caption = buildDriverCaption(driverName, keys);
     try {
@@ -2024,7 +2177,7 @@ export default function CharityDeliverySystem() {
                         return (
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong></div>
+                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong>{addresses[key] && addresses[key].postcode && <span style={{ marginLeft: '6px', color: '#777', fontSize: '12px' }}>{addresses[key].postcode}</span>}</div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
                             </div>
@@ -2047,7 +2200,7 @@ export default function CharityDeliverySystem() {
                         return (
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong></div>
+                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong>{addresses[key] && addresses[key].postcode && <span style={{ marginLeft: '6px', color: '#777', fontSize: '12px' }}>{addresses[key].postcode}</span>}</div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
                             </div>
@@ -2095,6 +2248,14 @@ export default function CharityDeliverySystem() {
             <>
               <div style={{ backgroundColor: '#e8f5e9', padding: '12px', borderRadius: '4px', marginBottom: '15px' }}>
                 <strong>Approved plan for {formatUKDate(selectedDate)}.</strong> Tap Share on each driver to send their list (image + route link) via WhatsApp.
+              </div>
+              <div style={{ border: '2px solid #1b5e20', borderRadius: '6px', padding: '12px', marginBottom: '18px', background: '#f1f8e9' }}>
+                <strong>📋 All deliveries (one image)</strong>
+                <p style={{ fontSize: '12px', color: '#666', margin: '4px 0 10px 0' }}>A single image with every driver's list and an overall totals header — useful for your own overview or the butcher.</p>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button onClick={shareAllImage} style={{ padding: '10px 18px', backgroundColor: '#1b5e20', color: 'white', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>📲 Share all</button>
+                  <button onClick={downloadAllImage} style={{ padding: '10px 18px', backgroundColor: '#607d8b', color: 'white', border: 'none', cursor: 'pointer' }}>⬇ Download all</button>
+                </div>
               </div>
               {Object.keys(allocations).filter(d => d !== '__unassigned' && allocations[d] && allocations[d].length > 0).map((driver) => {
                 const keys = allocations[driver];
