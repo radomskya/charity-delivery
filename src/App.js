@@ -44,6 +44,7 @@ export default function CharityDeliverySystem() {
   // UI Navigation
   const [activeTab, setActiveTab] = useState('addresses');
   const [addressSearch, setAddressSearch] = useState('');
+  const [availabilityEditMode, setAvailabilityEditMode] = useState(false);
   const [showAddAddress, setShowAddAddress] = useState(false);
   const [showAddDriver, setShowAddDriver] = useState(false);
   const [editingDriverName, setEditingDriverName] = useState('');
@@ -1135,12 +1136,10 @@ export default function CharityDeliverySystem() {
       result[elig.find(d => result[d].length === minCount)].push(key);
     });
 
-    // FINAL REBALANCE: even out counts to spread <= 1 without breaking avoid/preferred.
-    // Preferred-locked addresses must stay; we only move non-preferred ones.
-    const isLocked = (key) => {
-      const a = addrInfo(key);
-      return a.preferredDriver && avail.includes(a.preferredDriver);
-    };
+    // FINAL REBALANCE: even out counts to spread <= 1.
+    // Preferred addresses are honoured as far as balance allows: they stay put unless
+    // their driver is over the fair share, in which case a preferred address can be
+    // moved to balance counts. Avoid constraints are always respected.
     const dist2 = (a,b) => { const dl=a.lat-b.lat, dn=a.lng-b.lng; return Math.sqrt(dl*dl+dn*dn); };
     const cent = (d) => {
       const pts = result[d].map(k=>addrInfo(k)).filter(a=>typeof a.lat==='number');
@@ -1154,30 +1153,48 @@ export default function CharityDeliverySystem() {
       if (result[maxD].length - result[minD].length <= 1) break;
       const minC = cent(minD);
       const maxC = cent(maxD);
-      // Choose the address to move by GAIN: how much closer it is to the receiving
-      // driver's area than to its current driver's area. This moves outliers (poor fit
-      // where they are, good fit where they'd go) rather than well-placed addresses.
-      let bestKey=null, bestGain=-Infinity;
+      // Is an address "preferred-locked" to maxD? It's protected UNLESS maxD is over the
+      // fair-share target — then preferred addresses become movable so counts can balance.
+      const maxOverTarget = result[maxD].length > target;
+      const protectedForMax = (key) => {
+        const a = addrInfo(key);
+        if (a.preferredDriver === maxD && avail.includes(maxD)) {
+          return !maxOverTarget; // protected only while maxD isn't over target
+        }
+        return false;
+      };
+      // Choose the address to move by GAIN, but prefer moving NON-preferred addresses:
+      // we add a big bonus to non-preferred so a preferred one only moves if nothing else fits.
+      let bestKey=null, bestScore=-Infinity;
       result[maxD].forEach(key => {
-        if (isLocked(key)) return;
+        if (protectedForMax(key)) return;
         if (((addrInfo(key).avoidDrivers)||[]).includes(minD)) return;
         const a = addrInfo(key);
+        const isPref = a.preferredDriver === maxD;
+        let gain;
         if (typeof a.lat !== 'number') {
-          // no coords: neutral gain, still movable to satisfy balance
-          if (bestGain < 0) { bestGain = 0; bestKey = key; }
-          return;
+          gain = 0;
+        } else {
+          const distToCurrent = maxC ? dist2(a, maxC) : 0;
+          const distToNew = minC ? dist2(a, minC) : 0;
+          gain = distToCurrent - distToNew;
         }
-        const distToCurrent = maxC ? dist2(a, maxC) : 0;
-        const distToNew = minC ? dist2(a, minC) : 0;
-        const gain = distToCurrent - distToNew; // high = far from current, close to new
-        if (gain > bestGain) { bestGain = gain; bestKey = key; }
+        // Strongly prefer moving non-preferred addresses (bonus dwarfs geographic gain).
+        const score = gain + (isPref ? 0 : 100);
+        if (score > bestScore) { bestScore = score; bestKey = key; }
       });
       if (!bestKey) {
         let moved = false;
         const overs = avail.slice().sort((a,b)=>result[b].length-result[a].length);
         for (const od of overs) {
           if (result[od].length - result[minD].length <= 1) break;
-          const cand = result[od].find(key => !isLocked(key) && !((addrInfo(key).avoidDrivers)||[]).includes(minD));
+          const odOver = result[od].length > target;
+          const cand = result[od].find(key => {
+            const a = addrInfo(key);
+            if (((a.avoidDrivers)||[]).includes(minD)) return false;
+            if (a.preferredDriver === od && avail.includes(od) && !odOver) return false;
+            return true;
+          });
           if (cand) { result[od]=result[od].filter(x=>x!==cand); result[minD].push(cand); moved=true; break; }
         }
         if (!moved) break;
@@ -2257,14 +2274,21 @@ export default function CharityDeliverySystem() {
               {/* Availability */}
               <h3>1. Driver Availability</h3>
               <p style={{ fontSize: '13px', color: '#666' }}>
-                {activePollId ? 'Live from the poll. Tick or untick to override.' : 'No active poll — tick who is available this week.'}
+                {activePollId ? 'Showing poll responses. Use “Edit availability” to manually override.' : 'No active poll — turn on Edit availability to tick who is available.'}
               </p>
-              {activePollId && (
-                <button onClick={seedAvailabilityFromVotes}
-                  style={{ padding: '8px 16px', marginBottom: '10px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>
-                  ↺ Load poll results
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                {activePollId && (
+                  <button onClick={seedAvailabilityFromVotes}
+                    style={{ padding: '8px 16px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>
+                    ↺ Load poll results
+                  </button>
+                )}
+                <button onClick={() => setAvailabilityEditMode(m => !m)}
+                  style={{ padding: '8px 16px', backgroundColor: availabilityEditMode ? '#e65100' : '#fff', color: availabilityEditMode ? 'white' : '#e65100', border: '2px solid #e65100', cursor: 'pointer', fontWeight: 'bold' }}>
+                  {availabilityEditMode ? '🔓 Editing — click to lock' : '🔒 Edit availability'}
                 </button>
-              )}
+              </div>
+              {availabilityEditMode && <p style={{ fontSize: '12px', color: '#e65100', marginTop: 0 }}>Edit mode on — tick/untick to override. Overriding a driver's own vote will ask for confirmation.</p>}
               <div style={{ marginBottom: '20px' }}>
                 {Object.keys(drivers).length === 0 && <p style={{ color: '#999' }}>Add drivers first.</p>}
                 {Object.keys(drivers).map((name) => {
@@ -2273,16 +2297,19 @@ export default function CharityDeliverySystem() {
                   let voted = dvote ? dvote.available : null;
                   let byAdmin = dvote ? dvote.by === 'admin' : false;
                   const ticked = !!availableDrivers[name];
+                  const voteTime = dvote && dvote.at ? new Date(dvote.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
                   return (
-                    <label key={name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0' }}>
-                      <input type="checkbox" checked={ticked} onChange={() => toggleDriverAvailable(name)} />
+                    <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0', flexWrap: 'wrap' }}>
+                      {availabilityEditMode && <input type="checkbox" checked={ticked} onChange={() => toggleDriverAvailable(name)} style={{ width: '18px', height: '18px' }} />}
+                      {!availabilityEditMode && <span style={{ width: '16px', textAlign: 'center', color: ticked ? '#4CAF50' : '#ccc' }}>{ticked ? '✓' : '○'}</span>}
                       <strong>{name}</strong>
                       {voted === true && !byAdmin && <span style={{ fontSize: '12px', color: 'green' }}>✓ voted available</span>}
                       {voted === false && !byAdmin && <span style={{ fontSize: '12px', color: '#c62828' }}>✗ voted not available</span>}
                       {voted === null && <span style={{ fontSize: '12px', color: '#999' }}>no vote</span>}
                       {byAdmin && voted === true && <span style={{ fontSize: '12px', color: '#81c784', fontWeight: 'bold' }}>✚ available (by admin manually)</span>}
                       {byAdmin && voted === false && <span style={{ fontSize: '12px', color: '#e57373', fontWeight: 'bold' }}>✚ not available (by admin manually)</span>}
-                    </label>
+                      {voteTime && <span style={{ fontSize: '11px', color: '#999' }}>· {voteTime}</span>}
+                    </div>
                   );
                 })}
               </div>
@@ -2364,7 +2391,9 @@ export default function CharityDeliverySystem() {
                               <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong> <a href={singleMapLink(key)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', textDecoration: 'none' }}>🗺️</a></div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
-                              {distNext !== null && <div style={{ fontSize: farJump ? '14px' : '11px', color: farJump ? '#e65100' : '#999', marginTop: '2px', fontWeight: farJump ? 'bold' : 'normal' }}>↓ {distNext.toFixed(1)} mi to next{farJump ? '  ⚠ FAR' : ''}</div>}
+                              {distNext !== null && (farJump
+                                ? <div style={{ display: 'inline-block', marginTop: '4px', backgroundColor: '#fff3e0', border: '1.5px solid #e65100', borderRadius: '4px', padding: '3px 8px', fontSize: '13px', color: '#e65100', fontWeight: 'bold' }}>⚠ FAR · {distNext.toFixed(1)} mi to next</div>
+                                : <div style={{ fontSize: '11px', color: '#999', marginTop: '2px' }}>↓ {distNext.toFixed(1)} mi to next</div>)}
                             </div>
                             {!allocationApproved && (
                               <select value={driver} onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
