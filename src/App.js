@@ -1918,21 +1918,40 @@ export default function CharityDeliverySystem() {
     let y = [hy, hy];
     const lineH = 4.6;
 
-    const ensureSpace = (need, c) => {
-      if (y[c] + need <= pageH - margin) return c;
-      // try the other column
-      const other = c === 0 ? 1 : 0;
-      if (y[other] + need <= pageH - margin) return other;
-      // both full -> new page
-      doc.addPage(); y[0] = margin + 4; y[1] = margin + 4; return 0;
-    };
-
     driverNames.forEach((d) => {
       const keys = orderStops(allocations[d]);
       let dC = 0, dM = 0, dP = 0;
       keys.forEach((k) => { const q = calculatedAddresses[k] || {}; dC += q.chicken || 0; dM += q.meat || 0; dP += q.pies || 0; });
-      const blockHeight = 10 + keys.length * (lineH * 2 + 2) + 8;
-      col = ensureSpace(28, col); // ensure room for at least the header + a couple rows
+
+      // Measure the FULL block height (header + every stop with its wrapped address/note +
+      // totals) so the whole driver stays together in one column — the totals never get
+      // separated onto the next column.
+      let blockHeight = 5 + 5 + 5 + 3; // space + red line + name gap + header underline gap
+      keys.forEach((key) => {
+        const a = addresses[key] || {};
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+        const aLines = doc.splitTextToSize((a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : ''), colW);
+        let nLines = 0;
+        if (a.notes) { doc.setFont('helvetica', 'bolditalic'); doc.setFontSize(8); nLines = doc.splitTextToSize('Note: ' + a.notes, colW).length; }
+        blockHeight += aLines.length * lineH + lineH + nLines * (lineH - 0.4) + 3;
+      });
+      blockHeight += 11; // totals box
+
+      // Choose the column ONCE for the whole block.
+      const usable = pageH - margin;
+      if (y[col] + 5 + blockHeight > usable) {
+        const other = col === 0 ? 1 : 0;
+        if (y[other] + 5 + blockHeight <= usable) {
+          col = other;
+        } else if (blockHeight <= usable - (margin + 4)) {
+          // doesn't fit in either column on this page, but fits on a fresh page → new page
+          doc.addPage(); y[0] = margin + 4; y[1] = margin + 4; col = 0;
+        } else {
+          // taller than a full page (very long round) → just place in the emptier column
+          // and let it flow down the page as a last resort.
+          col = (y[0] <= y[1]) ? 0 : 1;
+        }
+      }
       const x = colX[col];
 
       // space above the red divider so it isn't crammed against the previous block
@@ -1951,13 +1970,11 @@ export default function CharityDeliverySystem() {
         const a = addresses[key] || {};
         const q = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
         const addr = (a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : '');
-        // pre-wrap to know how tall this stop will be, so it isn't split across a column break
+        // (column already chosen for the whole block, so this stop stays put)
         doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
         const addrLines = doc.splitTextToSize(addr, colW);
         let noteLines = [];
         if (a.notes) { doc.setFont('helvetica', 'bolditalic'); doc.setFontSize(8); noteLines = doc.splitTextToSize('Note: ' + a.notes, colW); }
-        const stopH = addrLines.length * lineH + lineH + noteLines.length * (lineH - 0.4) + 3;
-        col = ensureSpace(stopH, col);
         const cx = colX[col];
 
         doc.setTextColor(17); doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
@@ -1971,8 +1988,7 @@ export default function CharityDeliverySystem() {
         doc.setDrawColor(225); doc.setLineWidth(0.2); doc.line(cx, y[col] - 1, cx + colW, y[col] - 1); y[col] += 1.5;
       });
 
-      // totals
-      col = ensureSpace(8, col);
+      // totals — stays in the same column as the driver's stops
       const tx = colX[col];
       doc.setFillColor(238, 246, 238); doc.setDrawColor(76, 175, 80); doc.setLineWidth(0.4);
       doc.rect(tx, y[col], colW, 7, 'FD');
