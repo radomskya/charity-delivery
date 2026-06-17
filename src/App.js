@@ -2352,31 +2352,44 @@ export default function CharityDeliverySystem() {
               {availabilityEditMode && <p style={{ fontSize: '12px', color: '#e65100', marginTop: 0 }}>Edit mode on — tick/untick to override. Overriding a driver's own vote will ask for confirmation.</p>}
               <div style={{ marginBottom: '20px' }}>
                 {Object.keys(drivers).length === 0 && <p style={{ color: '#999' }}>Add drivers first.</p>}
-                {Object.keys(drivers).map((name) => {
-                  // find this driver's vote (and whether it was admin-set)
-                  const dvote = getDriverVote(name);
-                  let voted = dvote ? dvote.available : null;
-                  let byAdmin = dvote ? dvote.by === 'admin' : false;
-                  const ticked = !!availableDrivers[name];
-                  const voteTime = dvote && dvote.at ? new Date(dvote.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
-                  return (
-                    <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0', flexWrap: 'wrap' }}>
-                      {availabilityEditMode && <input type="checkbox" checked={ticked} onChange={() => toggleDriverAvailable(name)} style={{ width: '18px', height: '18px' }} />}
-                      {!availabilityEditMode && (() => {
-                        if (ticked) return <span style={{ width: '16px', textAlign: 'center', color: '#4CAF50', fontWeight: 'bold' }}>✓</span>;
-                        if (voted === false) return <span style={{ width: '16px', textAlign: 'center', color: '#c62828', fontWeight: 'bold' }}>✗</span>;
-                        return <span style={{ width: '16px', textAlign: 'center', color: '#ccc' }}>○</span>;
-                      })()}
-                      <strong>{name}</strong>
-                      {voted === true && !byAdmin && <span style={{ fontSize: '12px', color: 'green' }}>✓ voted available</span>}
-                      {voted === false && !byAdmin && <span style={{ fontSize: '12px', color: '#c62828' }}>✗ voted not available</span>}
-                      {voted === null && <span style={{ fontSize: '12px', color: '#999' }}>no vote</span>}
-                      {byAdmin && voted === true && <span style={{ fontSize: '12px', color: '#81c784', fontWeight: 'bold' }}>✚ available (by admin manually)</span>}
-                      {byAdmin && voted === false && <span style={{ fontSize: '12px', color: '#e57373', fontWeight: 'bold' }}>✚ not available (by admin manually)</span>}
-                      {voteTime && <span style={{ fontSize: '11px', color: '#999' }}>· {voteTime}</span>}
-                    </div>
-                  );
-                })}
+                {Object.keys(drivers).length > 0 && (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                    <tbody>
+                      <tr style={{ background: '#f0f0f0' }}>
+                        <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '2px solid #333', width: '36px' }}>{availabilityEditMode ? '✓?' : ''}</th>
+                        <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '2px solid #333' }}>Driver</th>
+                        <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '2px solid #333' }}>Status</th>
+                      </tr>
+                      {Object.keys(drivers).map((name) => {
+                        const dvote = getDriverVote(name);
+                        let voted = dvote ? dvote.available : null;
+                        let byAdmin = dvote ? dvote.by === 'admin' : false;
+                        const ticked = !!availableDrivers[name];
+                        const voteTime = dvote && dvote.at ? new Date(dvote.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+                        return (
+                          <tr key={name} style={{ borderBottom: '1px solid #e2e2e2' }}>
+                            <td style={{ padding: '8px 6px', textAlign: 'center', verticalAlign: 'top' }}>
+                              {availabilityEditMode
+                                ? <input type="checkbox" checked={ticked} onChange={() => toggleDriverAvailable(name)} style={{ width: '18px', height: '18px' }} />
+                                : (ticked
+                                    ? <span style={{ color: '#4CAF50', fontWeight: 'bold' }}>✓</span>
+                                    : (voted === false ? <span style={{ color: '#c62828', fontWeight: 'bold' }}>✗</span> : <span style={{ color: '#ccc' }}>○</span>))}
+                            </td>
+                            <td style={{ padding: '8px 6px', verticalAlign: 'top' }}><strong>{name}</strong></td>
+                            <td style={{ padding: '8px 6px', verticalAlign: 'top' }}>
+                              {voted === true && !byAdmin && <span style={{ color: 'green' }}>✓ voted available</span>}
+                              {voted === false && !byAdmin && <span style={{ color: '#c62828' }}>✗ voted not available</span>}
+                              {voted === null && <span style={{ color: '#999' }}>no vote</span>}
+                              {byAdmin && voted === true && <span style={{ color: '#2e7d32', fontWeight: 'bold' }}>✚ available (by admin)</span>}
+                              {byAdmin && voted === false && <span style={{ color: '#c62828', fontWeight: 'bold' }}>✚ not available (by admin)</span>}
+                              {voteTime && <span style={{ color: '#999', display: 'block', fontSize: '11px', marginTop: '2px' }}>{voteTime}</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </div>
 
               {activePollId && (() => {
