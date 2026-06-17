@@ -1405,6 +1405,42 @@ export default function CharityDeliverySystem() {
       {activeTab === 'addresses' && (
         <div>
           <h2>📋 Addresses</h2>
+          {(() => {
+            const today = new Date().toISOString().split('T')[0];
+            const activeKeys = Object.keys(addresses).filter((k) => !isOnHold(addresses[k], today));
+            const sum = (which) => {
+              let c = 0, m = 0, p = 0;
+              activeKeys.forEach((k) => {
+                const w = addresses[k][which];
+                if (w) { c += (w.chicken || 0); m += (w.meat || 0); p += (w.pies || 0); }
+              });
+              return { c, m, p };
+            };
+            const a = sum('weekA'), b = sum('weekB'), f = sum('firstOfMonth');
+            const heldCount = Object.keys(addresses).length - activeKeys.length;
+            const box = (title, bg, border, vals) => (
+              <div style={{ flex: 1, minWidth: '150px', background: bg, border: `2px solid ${border}`, borderRadius: '6px', padding: '12px' }}>
+                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>{title}</div>
+                {vals === null
+                  ? <div style={{ fontSize: '26px', fontWeight: 'bold' }}>{activeKeys.length}</div>
+                  : <div style={{ fontSize: '14px' }}>🍗 {vals.c} &nbsp; 🍖 {vals.m} &nbsp; 🥧 {vals.p}</div>}
+              </div>
+            );
+            return (
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '18px' }}>
+                {box('Active addresses', '#e3f2fd', '#1976d2', null)}
+                {box('Week A', '#e8f5e9', '#4CAF50', a)}
+                {box('Week B', '#fff3e0', '#ff9800', b)}
+                {box('First of Month', '#f3e5f5', '#9c27b0', f)}
+                {heldCount > 0 && (
+                  <div style={{ flex: 1, minWidth: '150px', background: '#fafafa', border: '2px solid #bbb', borderRadius: '6px', padding: '12px' }}>
+                    <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>On hold</div>
+                    <div style={{ fontSize: '26px', fontWeight: 'bold', color: '#888' }}>{heldCount}</div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <h3>Addresses</h3>
           <button onClick={startAddAddress} style={{ padding: '8px 16px', marginBottom: '10px' }}>
             ➕ Add Address
