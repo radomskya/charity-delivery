@@ -1184,6 +1184,24 @@ export default function CharityDeliverySystem() {
   // always go to the closest unvisited next). Un-geocoded stops go at the end.
   // This is the single source of truth for driving order, used in the review, the
   // driver image, and the Google Maps route link so they all match.
+  // Approximate straight-line distance in miles between two addresses (for spotting outliers).
+  const milesBetween = (k1, k2) => {
+    const a = addresses[k1], b = addresses[k2];
+    if (!a || !b || typeof a.lat !== 'number' || typeof b.lat !== 'number') return null;
+    const R = 3958.8; // earth radius in miles
+    const toRad = (x) => x * Math.PI / 180;
+    const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+    const lat1 = toRad(a.lat), lat2 = toRad(b.lat);
+    const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
+    return R * 2 * Math.asin(Math.sqrt(h));
+  };
+
+  const singleMapLink = (key) => {
+    const a = addresses[key] || {};
+    const q = (a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : '');
+    return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q.trim());
+  };
+
   const orderStops = (keys) => {
     const withCoords = keys.filter((k) => {
       const a = addresses[k] || {};
@@ -2210,14 +2228,18 @@ export default function CharityDeliverySystem() {
                     <div key={driver} style={{ border: '1px solid #ddd', borderRadius: '4px', padding: '12px', marginBottom: '12px' }}>
                       <strong>{driver}</strong> <span style={{ color: '#666', fontSize: '13px' }}>({proposedAllocation[driver].length} stops)</span>
                       {proposedAllocation[driver].length === 0 && <p style={{ fontSize: '12px', color: '#999', margin: '6px 0 0 0' }}>No stops</p>}
-                      {orderStops(proposedAllocation[driver]).map((key) => {
+                      {(() => { const ordered = orderStops(proposedAllocation[driver]); return ordered.map((key, idx) => {
                         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+                        const nextKey = ordered[idx + 1];
+                        const distNext = nextKey ? milesBetween(key, nextKey) : null;
+                        const farJump = distNext !== null && distNext > 1.5;
                         return (
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong></div>
+                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong> <a href={singleMapLink(key)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', textDecoration: 'none' }}>🗺️</a></div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
+                              {distNext !== null && <div style={{ fontSize: '11px', color: farJump ? '#c62828' : '#999', marginTop: '2px', fontWeight: farJump ? 'bold' : 'normal' }}>↓ {distNext.toFixed(1)} mi to next{farJump ? ' ⚠ far' : ''}</div>}
                             </div>
                             {!allocationApproved && (
                               <select value={driver} onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
@@ -2227,7 +2249,7 @@ export default function CharityDeliverySystem() {
                             )}
                           </div>
                         );
-                      })}
+                      }); })()}
                     </div>
                   ))}
                   {proposedAllocation.__unassigned && proposedAllocation.__unassigned.length > 0 && (
