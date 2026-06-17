@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
 import { getDatabase, ref, set, onValue, get } from 'firebase/database';
@@ -35,6 +35,7 @@ export default function CharityDeliverySystem() {
   // Authentication
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const hasLoadedOnce = useRef(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -130,7 +131,11 @@ export default function CharityDeliverySystem() {
 
   const loadUserData = (userId) => {
     if (!db) return;
-    get(ref(db, `users/${userId}`)).then((snapshot) => {
+    onValue(ref(db, `users/${userId}`), (snapshot) => {
+      // Only populate state from Firebase on the FIRST load. Ignoring later fires
+      // prevents the live listener from overwriting what the user is currently typing.
+      if (hasLoadedOnce.current) return;
+      hasLoadedOnce.current = true;
       const data = snapshot.val();
       if (data) {
         setAddresses(data.addresses || {});
@@ -168,8 +173,6 @@ export default function CharityDeliverySystem() {
           setDetectedFirstOfMonth(fm);
         }
       }
-      setLoading(false);
-    }).catch(() => {
       setLoading(false);
     });
   };
