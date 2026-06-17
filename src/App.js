@@ -2221,6 +2221,22 @@ export default function CharityDeliverySystem() {
               {Object.keys(proposedAllocation).length > 0 && (
                 <>
                   <h3>3. Review {allocationApproved && <span style={{ color: 'green', fontSize: '14px' }}>✓ Approved</span>}</h3>
+                  {(() => {
+                    let farCount = 0;
+                    Object.keys(proposedAllocation).filter(d => d !== '__unassigned').forEach((driver) => {
+                      const ordered = orderStops(proposedAllocation[driver]);
+                      for (let i = 0; i < ordered.length - 1; i++) {
+                        const d = milesBetween(ordered[i], ordered[i + 1]);
+                        if (d !== null && d > 1.5) farCount++;
+                      }
+                    });
+                    if (farCount === 0) return null;
+                    return (
+                      <div style={{ backgroundColor: '#fff3e0', border: '2px solid #e65100', borderRadius: '6px', padding: '12px', marginBottom: '12px', color: '#e65100', fontWeight: 'bold' }}>
+                        ⚠ {farCount} far {farCount === 1 ? 'jump' : 'jumps'} (over 1.5 mi) in the current plan — look for the orange ⚠ FAR markers below and reassign if needed.
+                      </div>
+                    );
+                  })()}
                   <p style={{ fontSize: '13px', color: '#666' }}>
                     {allocationApproved ? 'This plan is approved and locked. Unlock to make changes.' : 'Move any address to a different driver, then approve.'}
                   </p>
@@ -2239,7 +2255,7 @@ export default function CharityDeliverySystem() {
                               <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong> <a href={singleMapLink(key)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', textDecoration: 'none' }}>🗺️</a></div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
-                              {distNext !== null && <div style={{ fontSize: '11px', color: farJump ? '#c62828' : '#999', marginTop: '2px', fontWeight: farJump ? 'bold' : 'normal' }}>↓ {distNext.toFixed(1)} mi to next{farJump ? ' ⚠ far' : ''}</div>}
+                              {distNext !== null && <div style={{ fontSize: farJump ? '14px' : '11px', color: farJump ? '#e65100' : '#999', marginTop: '2px', fontWeight: farJump ? 'bold' : 'normal' }}>↓ {distNext.toFixed(1)} mi to next{farJump ? '  ⚠ FAR' : ''}</div>}
                             </div>
                             {!allocationApproved && (
                               <select value={driver} onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
