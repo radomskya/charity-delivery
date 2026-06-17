@@ -1570,23 +1570,32 @@ export default function CharityDeliverySystem() {
       const rowH = 70;
       const driverHeaderH = 70;
       const driverTotalsH = 64;
-      const driverGap = 24;
+      const driverGap = 34;
       const grandHeaderH = 110;
 
       const driverNames = Object.keys(allocations).filter((d) => d !== '__unassigned' && allocations[d] && allocations[d].length > 0);
 
-      // grand totals
+      // grand totals + per-driver totals (for the summary table)
       let gStops = 0, gC = 0, gM = 0, gP = 0;
+      const perDriver = {};
       driverNames.forEach((d) => {
+        let s = 0, c = 0, m = 0, p = 0;
         (allocations[d] || []).forEach((key) => {
-          const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
-          gStops += 1; gC += c.chicken; gM += c.meat; gP += c.pies;
+          const q = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+          s += 1; c += q.chicken; m += q.meat; p += q.pies;
         });
+        perDriver[d] = { stops: s, chicken: c, meat: m, pies: p };
+        gStops += s; gC += c; gM += m; gP += p;
       });
       const showPies = gP > 0;
 
+      // summary table sizing (in the grand header area)
+      const tableRowH = 26;
+      const tableH = 30 + (driverNames.length + 1) * tableRowH + 16;
+      const grandHeaderTotalH = grandHeaderH + tableH;
+
       // total height
-      let totalH = grandHeaderH;
+      let totalH = grandHeaderTotalH;
       driverNames.forEach((d) => {
         totalH += driverHeaderH + (allocations[d].length * rowH) + driverTotalsH + driverGap;
       });
@@ -1619,12 +1628,48 @@ export default function CharityDeliverySystem() {
       ctx.font = 'bold 16px Arial, sans-serif';
       ctx.fillText('Stops: ' + gStops + '      Chicken: ' + gC + '      Meat: ' + gM + (showPies ? '      Pies: ' + gP : ''), 16, 72);
 
-      let y = grandHeaderH + 16;
-
+      // SUMMARY TABLE
+      let ty = grandHeaderH + 12;
+      ctx.fillStyle = '#222222';
+      ctx.font = 'bold 13px Arial, sans-serif';
+      const colName = 16, colStops = 320, colC = 400, colM = 470, colP = 540;
+      ctx.fillText('Driver', colName, ty);
+      ctx.fillText('Stops', colStops, ty);
+      ctx.fillText('🍗', colC, ty);
+      ctx.fillText('🍖', colM, ty);
+      if (showPies) ctx.fillText('🥧', colP, ty);
+      ty += 8;
+      ctx.strokeStyle = '#333333'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(16, ty + 12); ctx.lineTo(width - 16, ty + 12); ctx.stroke();
+      ty += tableRowH;
+      ctx.font = '13px Arial, sans-serif';
       driverNames.forEach((d) => {
+        const t = perDriver[d];
+        ctx.fillStyle = '#111111';
+        ctx.fillText(fit(d, 290), colName, ty);
+        ctx.fillText(String(t.stops), colStops, ty);
+        ctx.fillText(String(t.chicken), colC, ty);
+        ctx.fillText(String(t.meat), colM, ty);
+        if (showPies) ctx.fillText(String(t.pies), colP, ty);
+        ctx.strokeStyle = '#e2e2e2'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(16, ty + 18); ctx.lineTo(width - 16, ty + 18); ctx.stroke();
+        ty += tableRowH;
+      });
+
+      let y = grandHeaderTotalH + 8;
+
+      driverNames.forEach((d, di) => {
         const keys = orderStops(allocations[d]);
         let dC = 0, dM = 0, dP = 0;
         keys.forEach((key) => { const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 }; dC += c.chicken; dM += c.meat; dP += c.pies; });
+
+        // bold RED divider marking the start of each driver
+        ctx.strokeStyle = '#c62828';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(8, y - 10);
+        ctx.lineTo(width - 8, y - 10);
+        ctx.stroke();
 
         // driver header
         ctx.fillStyle = '#222222';
