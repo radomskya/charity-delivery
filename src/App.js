@@ -112,7 +112,12 @@ export default function CharityDeliverySystem() {
   // ============================================================================
 
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
+    // Safety net: never let the loading screen hang for more than 8 seconds.
+    const safety = setTimeout(() => setLoading(false), 8000);
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
@@ -122,7 +127,7 @@ export default function CharityDeliverySystem() {
         setLoading(false);
       }
     });
-    return () => unsubscribe();
+    return () => { clearTimeout(safety); unsubscribe(); };
   }, []);
 
   // ============================================================================
@@ -182,7 +187,7 @@ export default function CharityDeliverySystem() {
 
   const saveData = () => {
     if (!user || !db) return;
-    set(ref(db, `users/${user.uid}`), {
+    const payload = {
       addresses,
       drivers,
       driverPhones,
@@ -210,6 +215,17 @@ export default function CharityDeliverySystem() {
       deliveryHistory,
       selectedDate: selectedDate || null,
       deliveryType
+    };
+    // Firebase set() throws if any value is undefined, which would abort the whole
+    // save (losing every field). JSON round-trip strips undefined cleanly.
+    let clean;
+    try {
+      clean = JSON.parse(JSON.stringify(payload));
+    } catch (e) {
+      clean = payload;
+    }
+    set(ref(db, `users/${user.uid}`), clean).catch((err) => {
+      console.error('Save failed:', err);
     });
   };
 
