@@ -130,7 +130,7 @@ export default function CharityDeliverySystem() {
 
   const loadUserData = (userId) => {
     if (!db) return;
-    onValue(ref(db, `users/${userId}`), (snapshot) => {
+    get(ref(db, `users/${userId}`)).then((snapshot) => {
       const data = snapshot.val();
       if (data) {
         setAddresses(data.addresses || {});
@@ -168,6 +168,8 @@ export default function CharityDeliverySystem() {
           setDetectedFirstOfMonth(fm);
         }
       }
+      setLoading(false);
+    }).catch(() => {
       setLoading(false);
     });
   };
