@@ -2223,11 +2223,26 @@ export default function CharityDeliverySystem() {
                   const total = calc ? (calc.chicken + calc.meat + calc.pies) : 0;
                   const zeroThisWeek = !excluded && total === 0;
                   return (
-                    <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: excluded ? '#fafafa' : (zeroThisWeek ? '#f7f7f7' : (calc && calc.overridden ? '#fffde7' : 'white')), opacity: zeroThisWeek ? 0.75 : 1 }}>
+                    <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: excluded ? '#fafafa' : (zeroThisWeek ? '#e8e8e8' : (calc && calc.overridden ? '#fffde7' : 'white')) }}>
                       <strong style={{ textDecoration: excluded ? 'line-through' : 'none' }}>{addresses[key].fullAddress}{addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong>
+                      {(() => {
+                        const a = addresses[key];
+                        const has = (w) => a[w] && (a[w].chicken || a[w].meat || a[w].pies);
+                        const weeks = [];
+                        if (has('weekA')) weeks.push('A');
+                        if (has('weekB')) weeks.push('B');
+                        if (has('firstOfMonth')) weeks.push('1st');
+                        if (weeks.length === 0) return null;
+                        // Only-this-pattern addresses are the useful sense-check (e.g. "only Week B")
+                        const onlyOne = weeks.length === 1;
+                        const label = onlyOne ? `only ${weeks[0] === '1st' ? '1st of month' : 'Week ' + weeks[0]}` : 'Weeks ' + weeks.join('/');
+                        // Is this pattern active for the current delivery?
+                        const activeNow = (weeks.includes('A') && detectedWeekType === 'A') || (weeks.includes('B') && detectedWeekType === 'B') || (weeks.includes('1st') && detectedFirstOfMonth);
+                        return <span style={{ marginLeft: '8px', fontSize: '11px', color: activeNow ? '#1565c0' : '#999', fontWeight: onlyOne ? 'bold' : 'normal', backgroundColor: onlyOne ? '#e3f2fd' : 'transparent', padding: onlyOne ? '1px 6px' : 0, borderRadius: '4px' }}>{label}</span>;
+                      })()}
                       {calc && calc.overridden && !excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#f57f17', fontWeight: 'bold' }}>✎ overridden this week</span>}
                       {excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#999', fontWeight: 'bold' }}>excluded this week</span>}
-                      {zeroThisWeek && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#999' }}>no items this week (you can add a one-off below)</span>}
+                      {zeroThisWeek && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#555', fontWeight: 'bold' }}>no items this week (you can add a one-off below)</span>}
                       {!excluded && (
                         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px', flexWrap: 'wrap' }}>
                           <label style={{ fontSize: '12px' }}>🍗 <input type="number" style={{ width: '55px', padding: '4px' }}
@@ -2439,6 +2454,8 @@ export default function CharityDeliverySystem() {
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
                               <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong> <a href={singleMapLink(key)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', textDecoration: 'none' }}>🗺️</a></div>
+                              {addresses[key] && addresses[key].preferredDriver === driver && <div style={{ fontSize: '12px', color: '#2e7d32', fontWeight: 'bold', marginTop: '2px' }}>⭐ Preferred address (with their preferred driver)</div>}
+                              {addresses[key] && addresses[key].preferredDriver && addresses[key].preferredDriver !== driver && <div style={{ fontSize: '12px', color: '#e65100', fontWeight: 'bold', marginTop: '2px' }}>↪ Prefers {addresses[key].preferredDriver} — placed here instead</div>}
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
                               {distNext !== null && (farJump
