@@ -1384,7 +1384,30 @@ export default function CharityDeliverySystem() {
         ordered.push(current);
       }
     }
-    return ordered.concat(noCoords);
+    // Within consecutive runs of the same street, sort by house number ascending so a
+    // driver works up the street in order (e.g. 5, 17, 26, 62, 79) rather than by raw coords.
+    const streetOf = (k) => {
+      const a = addresses[k] || {};
+      const full = (a.fullAddress || k);
+      // strip a leading house number/flat to get the street name
+      return full.replace(/^\s*(flat\s*\d+,?\s*)?\d+[a-z]?\s*,?\s*/i, '').toLowerCase().trim();
+    };
+    const houseNum = (k) => {
+      const a = addresses[k] || {};
+      const m = (a.fullAddress || k).match(/\d+/);
+      return m ? parseInt(m[0], 10) : Infinity;
+    };
+    const result = [];
+    let i = 0;
+    while (i < ordered.length) {
+      let j = i + 1;
+      while (j < ordered.length && streetOf(ordered[j]) === streetOf(ordered[i]) && streetOf(ordered[i]) !== '') j++;
+      const run = ordered.slice(i, j);
+      if (run.length > 1) run.sort((a, b) => houseNum(a) - houseNum(b));
+      run.forEach(k => result.push(k));
+      i = j;
+    }
+    return result.concat(noCoords);
   };
 
   const buildRouteLink = (keys) => {
@@ -1525,7 +1548,7 @@ export default function CharityDeliverySystem() {
 
         // notes
         if (a.notes) {
-          ctx.font = 'italic 12px Arial, sans-serif';
+          ctx.font = 'bold italic 13px Arial, sans-serif';
           ctx.fillStyle = '#c0392b';
           ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 44);
         }
@@ -1565,7 +1588,6 @@ export default function CharityDeliverySystem() {
   // Build ONE image containing every driver's card stacked, with an overall totals header.
   const rasteriseAllToPng = () => new Promise((resolve, reject) => {
     try {
-      const scale = 2;
       const width = 620;
       const rowH = 70;
       const driverHeaderH = 70;
@@ -1600,6 +1622,15 @@ export default function CharityDeliverySystem() {
         totalH += driverHeaderH + (allocations[d].length * rowH) + driverTotalsH + driverGap;
       });
       totalH += 20;
+
+      // WhatsApp downscales images whose longest side exceeds ~4000px, which blurs text.
+      // Render at the scale that lands the tall dimension right at that budget, so WhatsApp
+      // keeps it as-is instead of destructively shrinking a much larger image.
+      const MAX_DIM = 4000;
+      let scale = 2;
+      if (totalH * scale > MAX_DIM) scale = MAX_DIM / totalH;
+      // (scale may be below 1 for very tall images; that's fine — it still beats WhatsApp
+      // downscaling a 10000px image to ~4000px, because we control the text rendering here.)
 
       const canvas = document.createElement('canvas');
       canvas.width = width * scale;
@@ -1697,7 +1728,7 @@ export default function CharityDeliverySystem() {
           ctx.fillStyle = '#333333';
           ctx.fillText('Chicken: ' + c.chicken + '    Meat: ' + c.meat + (showPies ? '    Pies: ' + c.pies : ''), 16, y + 22);
           if (a.notes) {
-            ctx.font = 'italic 12px Arial, sans-serif';
+            ctx.font = 'bold italic 13px Arial, sans-serif';
             ctx.fillStyle = '#c0392b';
             ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 44);
           }
@@ -1760,8 +1791,32 @@ export default function CharityDeliverySystem() {
     }
   };
 
+  // Shorten a long URL via is.gd (free, no key). Falls back to the original on any failure
+  // so the route link always works even if the shortener is down.
+  const shortenUrl = async (longUrl) => {
+    try {
+      const resp = await fetch('https://is.gd/create.php?format=simple&url=' + encodeURIComponent(longUrl));
+      if (!resp.ok) return longUrl;
+      const short = (await resp.text()).trim();
+      return short.startsWith('http') ? short : longUrl;
+    } catch (e) {
+      return longUrl;
+    }
+  };
+
+  const buildDriverCaptionAsync = async (driverName, keys) => {
+    const header = deliveryMessage
+      .replace(/\{DRIVER\}/g, driverName)
+      .replace(/\{DATE\}/g, formatUKDate(selectedDate))
+      .replace(/\{STOPS\}/g, keys.length);
+    const route = buildRouteLink(keys);
+    if (!route) return header;
+    const shortRoute = await shortenUrl(route);
+    return header + `\n\n🗺️ Route: ${shortRoute}`;
+  };
+
   const shareDriver = async (driverName, keys) => {
-    const caption = buildDriverCaption(driverName, keys);
+    const caption = await buildDriverCaptionAsync(driverName, keys);
     try {
       const blob = await rasteriseToPng(driverName, keys);
       const file = new File([blob], `delivery-${driverName.replace(/\s+/g,'-')}.png`, { type: 'image/png' });
@@ -2537,7 +2592,7 @@ export default function CharityDeliverySystem() {
                             </div>
                             {!allocationApproved && (
                               <select value={driver} onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
-                                {Object.keys(drivers).filter(d => availableDrivers[d]).map(d => {
+                                {Object.keys(drivers).filter(d => availableDrivers[d] && !((addresses[key] && addresses[key].avoidDrivers) || []).includes(d)).map(d => {
                                   // distance from this address to the driver's NEAREST stop (how close their round is)
                                   let nearest = null;
                                   (proposedAllocation[d] || []).forEach(k2 => {
