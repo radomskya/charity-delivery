@@ -736,11 +736,38 @@ export default function CharityDeliverySystem() {
     newPhones[name] = editingDriverPhone.trim();
     setDrivers(newDrivers);
     setDriverPhones(newPhones);
+
+    // If renaming, update every address that referenced the old driver name so the
+    // preferred/avoid settings are retained (they're stored by name on each address).
+    let migratedAddresses = null;
+    if (editingDriverOriginal && editingDriverOriginal !== name) {
+      const updated = {};
+      let changed = false;
+      Object.keys(addresses).forEach((key) => {
+        const a = addresses[key];
+        let na = a;
+        if (a.preferredDriver === editingDriverOriginal) {
+          na = { ...na, preferredDriver: name }; changed = true;
+        }
+        if (Array.isArray(a.avoidDrivers) && a.avoidDrivers.includes(editingDriverOriginal)) {
+          na = { ...na, avoidDrivers: na.avoidDrivers.map(d => d === editingDriverOriginal ? name : d) }; changed = true;
+        }
+        updated[key] = na;
+      });
+      if (changed) {
+        migratedAddresses = updated;
+        setAddresses(updated);
+      }
+    }
+
     // Write immediately to Firebase (don't rely on the debounced save) so the poll
     // roster always has the latest drivers and numbers.
     if (user && db) {
       set(ref(db, `users/${user.uid}/drivers`), newDrivers).catch((e) => console.error('driver save', e));
       set(ref(db, `users/${user.uid}/driverPhones`), newPhones).catch((e) => console.error('phone save', e));
+      if (migratedAddresses) {
+        set(ref(db, `users/${user.uid}/addresses`), JSON.parse(JSON.stringify(migratedAddresses))).catch((e) => console.error('address migrate', e));
+      }
     }
     updateActivePollRoster(newDrivers, newPhones);
     setEditingDriverName('');
@@ -757,9 +784,26 @@ export default function CharityDeliverySystem() {
       const newPhones = { ...driverPhones };
       delete newPhones[name];
       setDriverPhones(newPhones);
+
+      // Remove this driver from any address preferred/avoid settings so nothing
+      // references a driver that no longer exists.
+      const updated = {};
+      let changed = false;
+      Object.keys(addresses).forEach((key) => {
+        const a = addresses[key];
+        let na = a;
+        if (a.preferredDriver === name) { na = { ...na, preferredDriver: '' }; changed = true; }
+        if (Array.isArray(a.avoidDrivers) && a.avoidDrivers.includes(name)) {
+          na = { ...na, avoidDrivers: na.avoidDrivers.filter(d => d !== name) }; changed = true;
+        }
+        updated[key] = na;
+      });
+      if (changed) setAddresses(updated);
+
       if (user && db) {
         set(ref(db, `users/${user.uid}/drivers`), newDrivers).catch((e) => console.error('driver save', e));
         set(ref(db, `users/${user.uid}/driverPhones`), newPhones).catch((e) => console.error('phone save', e));
+        if (changed) set(ref(db, `users/${user.uid}/addresses`), JSON.parse(JSON.stringify(updated))).catch((e) => console.error('address cleanup', e));
       }
       updateActivePollRoster(newDrivers, newPhones);
     }
@@ -911,32 +955,67 @@ export default function CharityDeliverySystem() {
     const unsub = onValue(votesRef, (snap) => {
       const v = snap.val() || {};
       setPollVotes(v);
-      // Auto-apply each vote to the availability list so the boxes tick themselves.
+      // Auto-apply votes to availability. Match each driver to their vote by phone-hash
+      // (stable) then name, and only apply votes that have a real available value.
       setAvailableDrivers((prev) => {
         const next = { ...prev };
-        Object.values(v).forEach((vote) => {
-          if (vote && vote.name) {
-            next[vote.name] = !!vote.available;
+        Object.keys(drivers).forEach((name) => {
+          const phone = driverPhones[name];
+          let vote = null;
+          if (phone && normalisePhone(phone) && v[hashPhone(phone)]) {
+            vote = v[hashPhone(phone)];
+          } else {
+            Object.values(v).forEach((x) => { if (x && x.name === name) vote = x; });
+          }
+          if (vote && typeof vote.available === 'boolean') {
+            next[name] = vote.available;
           }
         });
         return next;
       });
     });
     return () => unsub();
-  }, [activePollId]);
+  }, [activePollId, drivers, driverPhones]);
+
+  // Find a driver's vote robustly: match by phone-hash (stable across renames) first,
+  // then fall back to matching by name (for older votes or admin entries).
+  const getDriverVote = (name) => {
+    const phone = driverPhones[name];
+    let byHash = null;
+    if (phone && normalisePhone(phone)) {
+      const h = hashPhone(phone);
+      if (pollVotes[h]) byHash = pollVotes[h];
+    }
+    let byName = null;
+    Object.values(pollVotes).forEach((vote) => { if (vote && vote.name === name) byName = vote; });
+    // Prefer a vote that has a real available value; ignore malformed entries.
+    const candidates = [byHash, byName].filter(v => v && typeof v.available === 'boolean');
+    if (candidates.length === 0) return null;
+    // If both exist, prefer the most recent.
+    candidates.sort((a, b) => (new Date(b.at || 0)) - (new Date(a.at || 0)));
+    return candidates[0];
+  };
 
   // Seed availability from votes (available === true). Manual overrides preserved.
   const seedAvailabilityFromVotes = () => {
     const seed = {};
     Object.keys(drivers).forEach((name) => { seed[name] = false; });
-    Object.values(pollVotes).forEach((vote) => {
-      if (vote && vote.name && vote.available) seed[vote.name] = true;
+    Object.keys(drivers).forEach((name) => {
+      const dv = getDriverVote(name);
+      if (dv && dv.available) seed[name] = true;
     });
     setAvailableDrivers(seed);
   };
 
   const toggleDriverAvailable = (name) => {
     const newValue = !availableDrivers[name];
+    // If the driver already has their own real vote, confirm before overriding it.
+    const existing = getDriverVote(name);
+    if (existing && existing.by !== 'admin' && typeof existing.available === 'boolean' && existing.available !== newValue) {
+      if (!window.confirm(`${name} voted "${existing.available ? 'available' : 'not available'}" themselves. Override their own vote?`)) {
+        return;
+      }
+    }
     // Update local state immediately for responsiveness.
     setAvailableDrivers(prev => ({ ...prev, [name]: newValue }));
     // If a poll is live, record this as a vote in the poll itself, tagged as admin-set.
@@ -2149,8 +2228,8 @@ export default function CharityDeliverySystem() {
                 const names = Object.keys(drivers);
                 let yes = 0, no = 0, waiting = 0;
                 names.forEach((name) => {
-                  let v = null;
-                  Object.values(pollVotes).forEach(x => { if (x && x.name === name) v = x.available; });
+                  const dv = getDriverVote(name);
+                  let v = dv ? dv.available : null;
                   // "Available" = currently ticked (reflects votes + any admin override).
                   if (availableDrivers[name]) yes++;
                   else if (v === false) no++;
@@ -2190,8 +2269,9 @@ export default function CharityDeliverySystem() {
                 {Object.keys(drivers).length === 0 && <p style={{ color: '#999' }}>Add drivers first.</p>}
                 {Object.keys(drivers).map((name) => {
                   // find this driver's vote (and whether it was admin-set)
-                  let voted = null, byAdmin = false;
-                  Object.values(pollVotes).forEach(v => { if (v && v.name === name) { voted = v.available; byAdmin = v.by === 'admin'; } });
+                  const dvote = getDriverVote(name);
+                  let voted = dvote ? dvote.available : null;
+                  let byAdmin = dvote ? dvote.by === 'admin' : false;
                   const ticked = !!availableDrivers[name];
                   return (
                     <label key={name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0' }}>
@@ -2206,6 +2286,35 @@ export default function CharityDeliverySystem() {
                   );
                 })}
               </div>
+
+              {activePollId && (() => {
+                // Votes that don't match any current driver (by hash or name) — e.g. a driver
+                // who voted but isn't saved in your list, or a name that changed.
+                const driverHashes = {};
+                Object.keys(drivers).forEach((name) => {
+                  const p = driverPhones[name];
+                  if (p && normalisePhone(p)) driverHashes[hashPhone(p)] = true;
+                });
+                const driverNames = Object.keys(drivers);
+                const orphans = Object.entries(pollVotes).filter(([h, vote]) => {
+                  if (!vote || !vote.name) return false;
+                  if (driverHashes[h]) return false; // matches a driver by phone
+                  if (driverNames.includes(vote.name)) return false; // matches by name
+                  return true;
+                });
+                if (orphans.length === 0) return null;
+                return (
+                  <div style={{ backgroundColor: '#fff3e0', border: '2px solid #e65100', borderRadius: '6px', padding: '12px', marginBottom: '15px' }}>
+                    <strong style={{ color: '#e65100' }}>⚠ {orphans.length} vote{orphans.length === 1 ? '' : 's'} not matched to a driver</strong>
+                    <p style={{ fontSize: '12px', color: '#666', margin: '4px 0 8px 0' }}>These people voted but aren't in your driver list (or their name/number changed). Add them as a driver (in the Drivers tab) with the same phone number to bring their vote in.</p>
+                    {orphans.map(([h, vote]) => (
+                      <div key={h} style={{ fontSize: '13px', padding: '2px 0' }}>
+                        <strong>{vote.name}</strong> — {vote.by === 'admin' ? 'set by admin' : (vote.available ? '✓ available' : '✗ not available')}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
 
               {/* Run allocation */}
               <h3>2. Auto-Allocate</h3>
