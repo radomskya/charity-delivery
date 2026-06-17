@@ -2438,6 +2438,21 @@ export default function CharityDeliverySystem() {
                       </div>
                     );
                   })()}
+                  {(() => {
+                    let prefMiss = 0;
+                    Object.keys(proposedAllocation).filter(d => d !== '__unassigned').forEach((driver) => {
+                      (proposedAllocation[driver] || []).forEach((key) => {
+                        const a = addresses[key];
+                        if (a && a.preferredDriver && a.preferredDriver !== driver && availableDrivers[a.preferredDriver]) prefMiss++;
+                      });
+                    });
+                    if (prefMiss === 0) return null;
+                    return (
+                      <div style={{ backgroundColor: '#f3e5f5', border: '2px solid #6a1b9a', borderRadius: '6px', padding: '12px', marginBottom: '12px', color: '#6a1b9a', fontWeight: 'bold' }}>
+                        ↪ {prefMiss} {prefMiss === 1 ? 'address is' : 'addresses are'} placed away from an available preferred driver (moved to balance counts) — look for the purple ↪ markers below and reassign if you'd prefer.
+                      </div>
+                    );
+                  })()}
                   <p style={{ fontSize: '13px', color: '#666' }}>
                     {allocationApproved ? 'This plan is approved and locked. Unlock to make changes.' : 'Move any address to a different driver, then approve.'}
                   </p>
@@ -2455,7 +2470,7 @@ export default function CharityDeliverySystem() {
                             <div style={{ flex: 1 }}>
                               <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong> <a href={singleMapLink(key)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', textDecoration: 'none' }}>🗺️</a></div>
                               {addresses[key] && addresses[key].preferredDriver === driver && <div style={{ fontSize: '12px', color: '#2e7d32', fontWeight: 'bold', marginTop: '2px' }}>⭐ Preferred address (with their preferred driver)</div>}
-                              {addresses[key] && addresses[key].preferredDriver && addresses[key].preferredDriver !== driver && <div style={{ fontSize: '12px', color: '#e65100', fontWeight: 'bold', marginTop: '2px' }}>↪ Prefers {addresses[key].preferredDriver} — placed here instead</div>}
+                              {addresses[key] && addresses[key].preferredDriver && addresses[key].preferredDriver !== driver && availableDrivers[addresses[key].preferredDriver] && <div style={{ fontSize: '12px', color: '#6a1b9a', fontWeight: 'bold', marginTop: '2px' }}>↪ Preferred driver: {addresses[key].preferredDriver} (available) — placed here instead</div>}
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
                               {distNext !== null && (farJump
