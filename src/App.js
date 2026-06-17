@@ -1177,7 +1177,7 @@ export default function CharityDeliverySystem() {
     const rowsHTML = keys.map((key) => {
       const a = addresses[key] || {};
       const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
-      const notes = a.notes ? `<div style="font-size:11px;color:#666;margin-top:2px;">${escapeXML(a.notes)}</div>` : '';
+      const notes = a.notes ? `<div style="font-size:11px;color:#c62828;margin-top:2px;">${escapeXML(a.notes)}</div>` : '';
       return `<tr style="border-bottom:1px solid #dddddd;">
         <td style="padding:8px;border-right:1px solid #dddddd;vertical-align:top;"><strong>${escapeXML(a.fullAddress || key)}</strong>${notes}</td>
         <td style="padding:8px;text-align:center;border-right:1px solid #dddddd;font-weight:bold;">${c.chicken}</td>
@@ -1286,7 +1286,7 @@ export default function CharityDeliverySystem() {
         // notes
         if (a.notes) {
           ctx.font = 'italic 12px Arial, sans-serif';
-          ctx.fillStyle = '#777777';
+          ctx.fillStyle = '#c0392b';
           ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 44);
         }
 
@@ -1309,7 +1309,7 @@ export default function CharityDeliverySystem() {
       ctx.strokeRect(8, y, width - 16, totalsH - 12);
       ctx.fillStyle = '#1b5e20';
       ctx.font = 'bold 15px Arial, sans-serif';
-      ctx.fillText('TOTAL TO COLLECT', 20, y + 10);
+      ctx.fillText('TOTAL TO COLLECT    (Stops: ' + keys.length + ')', 20, y + 10);
       ctx.font = 'bold 17px Arial, sans-serif';
       ctx.fillStyle = '#111111';
       ctx.fillText('Chicken: ' + totC + '      Meat: ' + totM + (showPies ? '      Pies: ' + totP : ''), 20, y + 32);
@@ -1643,7 +1643,7 @@ export default function CharityDeliverySystem() {
                     <strong>Week B:</strong> {a.weekB.chicken}🍗 {a.weekB.meat}🍖 {a.weekB.pies}🥧<br />
                     <strong>First of Month:</strong> {(a.firstOfMonth?.chicken) || 0}🍗 {(a.firstOfMonth?.meat) || 0}🍖 {(a.firstOfMonth?.pies) || 0}🥧
                   </p>
-                  {a.notes && <p style={{ margin: '5px 0', fontSize: '11px', color: '#666' }}>📝 {a.notes}</p>}
+                  {a.notes && <p style={{ margin: '5px 0', fontSize: '11px', color: '#c62828' }}>📝 {a.notes}</p>}
                   {a.preferredDriver && <p style={{ margin: '3px 0', fontSize: '11px', color: '#2e7d32' }}>⭐ Preferred: {a.preferredDriver}</p>}
                   {a.avoidDrivers && a.avoidDrivers.length > 0 && <p style={{ margin: '3px 0', fontSize: '11px', color: '#c62828' }}>🚫 Avoid: {a.avoidDrivers.join(', ')}</p>}
                   <div style={{ display: 'flex', gap: '8px' }}>
@@ -1849,7 +1849,7 @@ export default function CharityDeliverySystem() {
                           {(calc && calc.overridden) && <button onClick={() => clearOverride(key)} style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: '#9e9e9e', color: 'white', border: 'none', cursor: 'pointer' }}>Reset</button>}
                         </div>
                       )}
-                      {addresses[key].notes && <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: '#666' }}>📝 {addresses[key].notes}</p>}
+                      {addresses[key].notes && <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: '#c62828' }}>📝 {addresses[key].notes}</p>}
                       <div style={{ marginTop: '8px' }}>
                         <button onClick={() => toggleExcludeAddress(key)} style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: excluded ? '#4CAF50' : '#ff9800', color: 'white', border: 'none', cursor: 'pointer' }}>
                           {excluded ? 'Include this week' : 'Exclude this week'}
@@ -1984,7 +1984,7 @@ export default function CharityDeliverySystem() {
                             <div style={{ flex: 1 }}>
                               <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong></div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
-                              {addresses[key] && addresses[key].notes && <div style={{ color: '#888', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
+                              {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
                             </div>
                             {!allocationApproved && (
                               <select value={driver} onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
@@ -2007,7 +2007,7 @@ export default function CharityDeliverySystem() {
                             <div style={{ flex: 1 }}>
                               <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong></div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
-                              {addresses[key] && addresses[key].notes && <div style={{ color: '#888', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
+                              {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
                             </div>
                             {!allocationApproved && (
                               <select value="__unassigned" onChange={(e) => reassignAddress(key, e.target.value)} style={{ padding: '4px', fontSize: '12px' }}>
@@ -2074,7 +2074,7 @@ export default function CharityDeliverySystem() {
                           <div key={key} style={{ padding: '6px 0', borderTop: '1px solid #f0f0f0', fontSize: '13px' }}>
                             <strong>{a.fullAddress || key}</strong>
                             <div style={{ color: '#444' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
-                            {a.notes && <div style={{ color: '#888', fontSize: '12px' }}>📝 {a.notes}</div>}
+                            {a.notes && <div style={{ color: '#c62828', fontSize: '12px' }}>📝 {a.notes}</div>}
                           </div>
                         );
                       })}
