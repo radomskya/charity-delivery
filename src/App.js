@@ -36,6 +36,7 @@ export default function CharityDeliverySystem() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const hasLoadedOnce = useRef(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -94,6 +95,9 @@ export default function CharityDeliverySystem() {
   const [deliveryMessage, setDeliveryMessage] = useState('📦 DELIVERY LIST FOR {DRIVER}\n📅 Week of: {DATE}\n🚗 Total stops: {STOPS}');
   const [butcherEmailTemplate, setButcherEmailTemplate] = useState('Hi,\n\nPlease prepare the following for collection on {DATE}:\n\n🍗 Chicken: {CHICKEN}\n🍖 Meat: {MEAT}\n🥧 Pies: {PIES}\n\nThank you!');
   const [butcherEmailAddress, setButcherEmailAddress] = useState('');
+  const [collectionAddress, setCollectionAddress] = useState('');
+  const [collectionLat, setCollectionLat] = useState(null);
+  const [collectionLng, setCollectionLng] = useState(null);
 
   // UI feedback
   const [copiedMessage, setCopiedMessage] = useState('');
@@ -145,6 +149,7 @@ export default function CharityDeliverySystem() {
       // prevents the live listener from overwriting what the user is currently typing.
       if (hasLoadedOnce.current) return;
       hasLoadedOnce.current = true;
+      setDataLoaded(true);
       const data = snapshot.val();
       if (data) {
         setAddresses(data.addresses || {});
@@ -159,6 +164,9 @@ export default function CharityDeliverySystem() {
         setDeliveryMessage(data.deliveryMessage || deliveryMessage);
         setButcherEmailTemplate(data.butcherEmailTemplate || butcherEmailTemplate);
         setButcherEmailAddress(data.butcherEmailAddress || '');
+        setCollectionAddress(data.collectionAddress || '');
+        setCollectionLat(typeof data.collectionLat === 'number' ? data.collectionLat : null);
+        setCollectionLng(typeof data.collectionLng === 'number' ? data.collectionLng : null);
         setCutoffDay(data.cutoffDay || 'thursday');
         setCutoffHour(data.cutoffHour || '08');
         setCutoffMinute(data.cutoffMinute || '00');
@@ -199,6 +207,9 @@ export default function CharityDeliverySystem() {
       deliveryMessage,
       butcherEmailTemplate,
       butcherEmailAddress: butcherEmailAddress || null,
+      collectionAddress: collectionAddress || null,
+      collectionLat: collectionLat,
+      collectionLng: collectionLng,
       cutoffDay,
       cutoffHour,
       cutoffMinute,
@@ -230,9 +241,12 @@ export default function CharityDeliverySystem() {
   };
 
   useEffect(() => {
+    // Don't save until the initial load from Firebase has completed, otherwise the
+    // debounced save could write empty default state over real data (a race on mount).
+    if (!dataLoaded) return;
     const timer = setTimeout(saveData, 1000);
     return () => clearTimeout(timer);
-  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, butcherEmailAddress, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, activePollId, broughtForwardTotal, deliveryHistory, selectedDate, deliveryType, user]);
+  }, [dataLoaded, addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, butcherEmailAddress, collectionAddress, collectionLat, collectionLng, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, activePollId, broughtForwardTotal, deliveryHistory, selectedDate, deliveryType, user]);
 
   // ============================================================================
   // DATE HELPERS (pure, usable from load before state is set)
@@ -672,6 +686,20 @@ export default function CharityDeliverySystem() {
     }
   };
 
+  const locateCollectionPoint = async () => {
+    if (!collectionAddress.trim()) { alert('Enter the collection point postcode first.'); return; }
+    setGeocoding(true);
+    const coords = await geocodePostcode(collectionAddress);
+    setGeocoding(false);
+    if (coords) {
+      setCollectionLat(coords.lat);
+      setCollectionLng(coords.lng);
+      alert('Collection point located. Routes will now start from the delivery nearest here.');
+    } else {
+      alert('Could not locate that postcode. Please check it and try again.');
+    }
+  };
+
   // ============================================================================
   // DRIVER MANAGEMENT (with edit)
   // ============================================================================
@@ -790,6 +818,9 @@ export default function CharityDeliverySystem() {
       anchorDate, anchorWeek, anchorFirstOfMonth,
       pollMessage, deliveryMessage, butcherEmailTemplate,
       butcherEmailAddress: butcherEmailAddress || null,
+      collectionAddress: collectionAddress || null,
+      collectionLat: collectionLat,
+      collectionLng: collectionLng,
       cutoffDay, cutoffHour, cutoffMinute, forceUKTime,
       broughtForwardTotal, deliveryHistory,
       exportedAt: new Date().toISOString()
@@ -1131,7 +1162,18 @@ export default function CharityDeliverySystem() {
     let ordered = [];
     if (withCoords.length > 0) {
       const remaining = withCoords.slice();
-      let current = remaining.shift();
+      // Start from the address nearest the collection point (if set), so the driver
+      // heads to their closest delivery first after collecting. Otherwise start at the first.
+      let startIdx = 0;
+      if (typeof collectionLat === 'number' && typeof collectionLng === 'number') {
+        const cp = { lat: collectionLat, lng: collectionLng };
+        let bestDist = Infinity;
+        remaining.forEach((k, idx) => {
+          const d = dist(cp, addresses[k]);
+          if (d < bestDist) { bestDist = d; startIdx = idx; }
+        });
+      }
+      let current = remaining.splice(startIdx, 1)[0];
       ordered.push(current);
       while (remaining.length > 0) {
         const cur = addresses[current];
@@ -2153,6 +2195,24 @@ export default function CharityDeliverySystem() {
           <input type="email" value={butcherEmailAddress} onChange={(e) => setButcherEmailAddress(e.target.value)}
             style={{ width: '100%', padding: '8px', marginBottom: '15px', boxSizing: 'border-box' }}
             placeholder="butcher@example.com" />
+
+          <h3>📍 Collection Point</h3>
+          <div style={{ backgroundColor: '#e8f5e9', padding: '15px', borderRadius: '4px', marginBottom: '20px', border: '2px solid #4CAF50' }}>
+            <p style={{ marginTop: 0, fontSize: '13px', color: '#666' }}>The postcode where drivers collect (e.g. the butcher). Each driver's route will start from the delivery nearest to here, so they head out efficiently after collecting.</p>
+            <label style={{ fontWeight: 'bold' }}>Collection postcode:</label>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px' }}>
+              <input type="text" value={collectionAddress} onChange={(e) => setCollectionAddress(e.target.value)}
+                style={{ flex: 1, padding: '8px', boxSizing: 'border-box' }} placeholder="e.g. WD6 1AB" />
+              <button onClick={locateCollectionPoint} disabled={geocoding}
+                style={{ padding: '8px 14px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {geocoding ? 'Locating…' : '📍 Locate'}
+              </button>
+            </div>
+            {(typeof collectionLat === 'number' && typeof collectionLng === 'number')
+              ? <p style={{ fontSize: '12px', color: '#2e7d32', margin: '8px 0 0 0' }}>✓ Located ({collectionLat.toFixed(4)}, {collectionLng.toFixed(4)})</p>
+              : <p style={{ fontSize: '12px', color: '#c62828', margin: '8px 0 0 0' }}>Not located yet — routes will start from an arbitrary stop until you locate this.</p>}
+          </div>
+
           <label>Butcher Email Template:</label>
           <textarea value={butcherEmailTemplate} onChange={(e) => setButcherEmailTemplate(e.target.value)}
             style={{ width: '100%', minHeight: '120px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
