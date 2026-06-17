@@ -1645,11 +1645,14 @@ export default function CharityDeliverySystem() {
       const bodyH = Math.max(colHeights[0], colHeights[1]);
       const totalH = grandHeaderTotalH + bodyH + 20;
 
-      // Scale so the tall dimension stays within WhatsApp's keep-as-is budget.
-      const MAX_DIM = 3800;
-      let scale = 2;
+      // Render at high resolution for sharp text. WhatsApp keeps images up to ~5000px on
+      // the longest side; the two-column layout is short enough to render at 3x and stay
+      // within that, so text comes out crisp. Cap so we never exceed the limit.
+      const MAX_DIM = 5000;
+      let scale = 3;
       if (totalH * scale > MAX_DIM) scale = MAX_DIM / totalH;
       if (width * scale > MAX_DIM) scale = Math.min(scale, MAX_DIM / width);
+      if (scale < 2) scale = 2; // never go below 2x — keep text legible even if large
 
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(width * scale);
@@ -1807,9 +1810,13 @@ export default function CharityDeliverySystem() {
 
   // Shorten a long URL via TinyURL (free, no key, CORS-friendly from the browser).
   // Falls back to the original on any failure so the route link always works.
+  // Shorten via is.gd, which does a clean INSTANT redirect (no preview/interstitial page,
+  // unlike tinyurl). If it fails for any reason, fall back to the full Google Maps URL —
+  // which itself opens Maps directly with no redirect page (just longer). Either way the
+  // driver taps straight into Maps.
   const shortenUrl = async (longUrl) => {
     try {
-      const resp = await fetch('https://tinyurl.com/api-create.php?url=' + encodeURIComponent(longUrl));
+      const resp = await fetch('https://is.gd/create.php?format=simple&url=' + encodeURIComponent(longUrl));
       if (!resp.ok) return longUrl;
       const short = (await resp.text()).trim();
       return short.startsWith('http') ? short : longUrl;
