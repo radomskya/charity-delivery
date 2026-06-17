@@ -130,8 +130,12 @@ export default function CharityDeliverySystem() {
   // ============================================================================
 
   const loadUserData = (userId) => {
-    if (!db) return;
+    if (!db) {
+      setLoading(false);
+      return;
+    }
     onValue(ref(db, `users/${userId}`), (snapshot) => {
+      setLoading(false);
       // Only populate state from Firebase on the FIRST load. Ignoring later fires
       // prevents the live listener from overwriting what the user is currently typing.
       if (hasLoadedOnce.current) return;
@@ -173,7 +177,6 @@ export default function CharityDeliverySystem() {
           setDetectedFirstOfMonth(fm);
         }
       }
-      setLoading(false);
     });
   };
 
@@ -2076,10 +2079,6 @@ export default function CharityDeliverySystem() {
           <input type="email" value={butcherEmailAddress} onChange={(e) => setButcherEmailAddress(e.target.value)}
             style={{ width: '100%', padding: '8px', marginBottom: '15px', boxSizing: 'border-box' }}
             placeholder="butcher@example.com" />
-          <div style={{ fontSize: '11px', color: '#999', marginTop: '-10px', marginBottom: '15px', fontFamily: 'monospace' }}>
-            debug — value:"{butcherEmailAddress}" | logged in:{user ? 'yes' : 'no'} | db:{db ? 'yes' : 'no'}
-            <button onClick={() => { saveData(); alert('Manual save triggered. Check Firebase now.'); }} style={{ marginLeft: '10px', fontSize: '11px' }}>Force save now</button>
-          </div>
           <label>Butcher Email Template:</label>
           <textarea value={butcherEmailTemplate} onChange={(e) => setButcherEmailTemplate(e.target.value)}
             style={{ width: '100%', minHeight: '120px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
