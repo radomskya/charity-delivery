@@ -185,6 +185,7 @@ export default function CharityDeliverySystem() {
       pollMessage,
       deliveryMessage,
       butcherEmailTemplate,
+      butcherEmailAddress: butcherEmailAddress || null,
       cutoffDay,
       cutoffHour,
       cutoffMinute,
