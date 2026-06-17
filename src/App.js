@@ -1601,9 +1601,10 @@ export default function CharityDeliverySystem() {
   // ~4000px downscale limit and the shared image stays sharp.
   const rasteriseAllToPng = () => new Promise((resolve, reject) => {
     try {
-      const colW = 600;           // width of one driver column
-      const colGap = 24;          // gap between the two columns
-      const width = colW * 2 + colGap + 32; // total canvas width (two columns + margins)
+      const NUM_COLS = 3;         // 3 columns makes the image roughly square, which fits
+      const colW = 560;           // WhatsApp's ~1600px photo limit with the least downscaling
+      const colGap = 20;          // gap between columns
+      const width = NUM_COLS * colW + (NUM_COLS - 1) * colGap + 32;
       const rowH = 64;
       const driverHeaderH = 56;
       const driverTotalsH = 56;
@@ -1635,24 +1636,27 @@ export default function CharityDeliverySystem() {
 
       // Distribute drivers across two columns balancing total height (greedy: tallest first
       // to the shorter column). Keeps the two columns roughly equal so the image isn't lopsided.
-      const colHeights = [0, 0];
-      const colDrivers = [[], []];
+      const colHeights = new Array(NUM_COLS).fill(0);
+      const colDrivers = Array.from({ length: NUM_COLS }, () => []);
       driverNames.slice().sort((a, b) => cardHeight(b) - cardHeight(a)).forEach((d) => {
-        const target = colHeights[0] <= colHeights[1] ? 0 : 1;
+        // place each driver in the currently-shortest column
+        let target = 0;
+        for (let c = 1; c < NUM_COLS; c++) { if (colHeights[c] < colHeights[target]) target = c; }
         colDrivers[target].push(d);
         colHeights[target] += cardHeight(d);
       });
-      const bodyH = Math.max(colHeights[0], colHeights[1]);
+      const bodyH = Math.max(...colHeights);
       const totalH = grandHeaderTotalH + bodyH + 20;
 
-      // Render at high resolution for sharp text. WhatsApp keeps images up to ~5000px on
-      // the longest side; the two-column layout is short enough to render at 3x and stay
-      // within that, so text comes out crisp. Cap so we never exceed the limit.
-      const MAX_DIM = 5000;
-      let scale = 3;
-      if (totalH * scale > MAX_DIM) scale = MAX_DIM / totalH;
-      if (width * scale > MAX_DIM) scale = Math.min(scale, MAX_DIM / width);
-      if (scale < 2) scale = 2; // never go below 2x — keep text legible even if large
+      // WhatsApp recompresses shared photos: it downscales so the LONGEST side is ~1600px
+      // and re-encodes as JPEG. Rendering huge therefore backfires — WhatsApp shrinks it
+      // hard and text blurs. Instead we render so the longest side lands near WhatsApp's
+      // kept size, so there's little/no downscaling and the (large) text stays crisp.
+      const TARGET_LONG = 1600;
+      const longSide = Math.max(width, totalH);
+      let scale = TARGET_LONG / longSide;
+      if (scale > 2) scale = 2;     // small rounds: don't upscale beyond 2x
+      if (scale < 0.5) scale = 0.5; // very large rounds: floor so it's not unreadable
 
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(width * scale);
@@ -1721,7 +1725,7 @@ export default function CharityDeliverySystem() {
         ctx.beginPath(); ctx.moveTo(ox, y - 8); ctx.lineTo(ox + colW, y - 8); ctx.stroke();
 
         ctx.fillStyle = '#222222';
-        ctx.font = 'bold 18px Arial, sans-serif';
+        ctx.font = 'bold 21px Arial, sans-serif';
         ctx.fillText(fit(d, colW - 120), ox, y);
         ctx.font = '13px Arial, sans-serif';
         ctx.fillStyle = '#666666';
@@ -1735,17 +1739,17 @@ export default function CharityDeliverySystem() {
           const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
           if (idx % 2 === 1) { ctx.fillStyle = '#e3edf7'; ctx.fillRect(ox - 4, y - 6, colW + 8, rowH); }
           ctx.fillStyle = '#111111';
-          ctx.font = 'bold 15px Arial, sans-serif';
+          ctx.font = 'bold 17px Arial, sans-serif';
           ctx.fillText(fit((a.fullAddress || key) + (a.postcode ? '  ' + a.postcode : ''), colW - 8), ox, y);
-          ctx.font = '14px Arial, sans-serif';
-          ctx.fillStyle = '#333333';
+          ctx.font = 'bold 15px Arial, sans-serif';
+          ctx.fillStyle = '#222222';
           ctx.fillText('Chicken: ' + c.chicken + '    Meat: ' + c.meat + (showPies ? '    Pies: ' + c.pies : ''), ox, y + 21);
           if (a.notes) {
-            ctx.font = 'bold italic 13px Arial, sans-serif';
+            ctx.font = 'bold italic 14px Arial, sans-serif';
             ctx.fillStyle = '#c0392b';
             ctx.fillText(fit('Note: ' + a.notes, colW - 8), ox, y + 42);
           }
-          ctx.strokeStyle = '#e2e2e2'; ctx.lineWidth = 1;
+          ctx.strokeStyle = '#cfcfcf'; ctx.lineWidth = 1.5;
           ctx.beginPath(); ctx.moveTo(ox, y + rowH - 8); ctx.lineTo(ox + colW, y + rowH - 8); ctx.stroke();
           y += rowH;
         });
@@ -1763,13 +1767,14 @@ export default function CharityDeliverySystem() {
         return y - oy;
       };
 
-      // Render the two columns
+      // Render the columns
       const startY = grandHeaderTotalH + 12;
-      const colX = [16, 16 + colW + colGap];
-      [0, 1].forEach((ci) => {
+      const colX = [];
+      for (let c = 0; c < NUM_COLS; c++) colX.push(16 + c * (colW + colGap));
+      for (let ci = 0; ci < NUM_COLS; ci++) {
         let y = startY;
         colDrivers[ci].forEach((d) => { y += drawDriver(d, colX[ci], y + 8); });
-      });
+      }
 
       canvas.toBlob((blob) => {
         if (blob) resolve(blob); else reject(new Error('Could not create image'));
