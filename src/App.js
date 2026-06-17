@@ -1810,19 +1810,34 @@ export default function CharityDeliverySystem() {
 
   // Shorten a long URL via TinyURL (free, no key, CORS-friendly from the browser).
   // Falls back to the original on any failure so the route link always works.
-  // Shorten via is.gd, which does a clean INSTANT redirect (no preview/interstitial page,
-  // unlike tinyurl). If it fails for any reason, fall back to the full Google Maps URL —
-  // which itself opens Maps directly with no redirect page (just longer). Either way the
-  // driver taps straight into Maps.
+  // Shorten the route URL for a tidy WhatsApp message. Tries spoo.me first (open-source,
+  // API-first, clean INSTANT redirect with no interstitial page), then is.gd, then falls
+  // back to the full Google Maps URL (which itself opens Maps directly, just longer).
+  // Every path lands the driver straight in Google Maps with no preview/redirect page.
   const shortenUrl = async (longUrl) => {
+    // 1) spoo.me — POST form-encoded, returns JSON { short_url }
+    try {
+      const resp = await fetch('https://spoo.me/', {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'url=' + encodeURIComponent(longUrl)
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const s = data && (data.short_url || data.shortUrl || data.short);
+        if (s && String(s).startsWith('http')) return s;
+      }
+    } catch (e) { /* fall through */ }
+    // 2) is.gd — simple GET, clean instant redirect
     try {
       const resp = await fetch('https://is.gd/create.php?format=simple&url=' + encodeURIComponent(longUrl));
-      if (!resp.ok) return longUrl;
-      const short = (await resp.text()).trim();
-      return short.startsWith('http') ? short : longUrl;
-    } catch (e) {
-      return longUrl;
-    }
+      if (resp.ok) {
+        const short = (await resp.text()).trim();
+        if (short.startsWith('http')) return short;
+      }
+    } catch (e) { /* fall through */ }
+    // 3) fallback: the full direct Maps URL (opens Maps straight away, just long)
+    return longUrl;
   };
 
   const buildDriverCaptionAsync = async (driverName, keys) => {
