@@ -2540,6 +2540,46 @@ export default function CharityDeliverySystem() {
                     </div>
                   )}
 
+                  {Object.keys(proposedAllocation).filter(d => d !== '__unassigned' && (proposedAllocation[d] || []).length > 0).length > 0 && (() => {
+                    const rows = Object.keys(proposedAllocation).filter(d => d !== '__unassigned' && (proposedAllocation[d] || []).length > 0).map((d) => {
+                      const ordered = orderStops(proposedAllocation[d]);
+                      let total = 0;
+                      for (let i = 0; i < ordered.length - 1; i++) {
+                        const m = milesBetween(ordered[i], ordered[i + 1]);
+                        if (m !== null) total += m;
+                      }
+                      return { d, stops: ordered.length, total };
+                    });
+                    const totalStops = rows.reduce((s, r) => s + r.stops, 0);
+                    return (
+                      <div style={{ marginBottom: '16px' }}>
+                        <h4 style={{ marginBottom: '6px' }}>Sense check before approving</h4>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                          <tbody>
+                            <tr style={{ background: '#f0f0f0' }}>
+                              <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '2px solid #333' }}>Driver</th>
+                              <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '2px solid #333' }}>Stops</th>
+                              <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '2px solid #333' }}>Round dist.</th>
+                            </tr>
+                            {rows.map((r) => (
+                              <tr key={r.d} style={{ borderBottom: '1px solid #e2e2e2' }}>
+                                <td style={{ padding: '8px 6px' }}>{r.d}</td>
+                                <td style={{ padding: '8px 6px', textAlign: 'center' }}>{r.stops}</td>
+                                <td style={{ padding: '8px 6px', textAlign: 'right' }}>{r.total.toFixed(1)} mi</td>
+                              </tr>
+                            ))}
+                            <tr style={{ borderTop: '2px solid #333', fontWeight: 'bold' }}>
+                              <td style={{ padding: '8px 6px' }}>Total</td>
+                              <td style={{ padding: '8px 6px', textAlign: 'center' }}>{totalStops}</td>
+                              <td style={{ padding: '8px 6px', textAlign: 'right' }}>{rows.reduce((s, r) => s + r.total, 0).toFixed(1)} mi</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                        <p style={{ fontSize: '11px', color: '#888', marginTop: '4px' }}>Distances are approximate straight-line totals for each round, to help compare fairness.</p>
+                      </div>
+                    );
+                  })()}
+
                   {!allocationApproved ? (
                     <button onClick={approveAllocation}
                       style={{ padding: '10px 20px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}>
