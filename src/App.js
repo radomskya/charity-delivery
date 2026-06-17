@@ -1384,29 +1384,39 @@ export default function CharityDeliverySystem() {
         ordered.push(current);
       }
     }
-    // Within consecutive runs of the same street, sort by house number ascending so a
-    // driver works up the street in order (e.g. 5, 17, 26, 62, 79) rather than by raw coords.
-    const streetOf = (k) => {
-      const a = addresses[k] || {};
-      const full = (a.fullAddress || k);
-      // strip a leading house number/flat to get the street name
-      return full.replace(/^\s*(flat\s*\d+,?\s*)?\d+[a-z]?\s*,?\s*/i, '').toLowerCase().trim();
-    };
+    // Same-street ordering: group stops that share a postcode (robust against small
+    // address-text differences like "Herts" being present or not), sort each group by
+    // house number ascending, and keep the groups in their nearest-neighbour order. This
+    // also pulls together same-street stops that the path left non-adjacent.
     const houseNum = (k) => {
       const a = addresses[k] || {};
-      const m = (a.fullAddress || k).match(/\d+/);
+      // first standalone number that isn't a flat number — handle "Flat 2, 1 Beech Drive"
+      const full = (a.fullAddress || k);
+      const stripped = full.replace(/^\s*flat\s*\d+,?\s*/i, '');
+      const m = stripped.match(/\d+/);
       return m ? parseInt(m[0], 10) : Infinity;
     };
+    const groupKeyOf = (k) => {
+      const a = addresses[k] || {};
+      let full = (a.fullAddress || k);
+      // strip leading flat + house number
+      full = full.replace(/^\s*(flat\s*\d+,?\s*)?\d+[a-z]?\s*,?\s*/i, '');
+      // take just the street name (first comma-separated part), normalised
+      let street = full.split(',')[0].toLowerCase().trim();
+      // drop common county/town noise and punctuation
+      street = street.replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+      return street || ('pc:' + (a.postcode || '').replace(/\s+/g, '').toLowerCase());
+    };
     const result = [];
-    let i = 0;
-    while (i < ordered.length) {
-      let j = i + 1;
-      while (j < ordered.length && streetOf(ordered[j]) === streetOf(ordered[i]) && streetOf(ordered[i]) !== '') j++;
-      const run = ordered.slice(i, j);
-      if (run.length > 1) run.sort((a, b) => houseNum(a) - houseNum(b));
-      run.forEach(k => result.push(k));
-      i = j;
-    }
+    const done = new Set();
+    ordered.forEach((k) => {
+      if (done.has(k)) return;
+      const gk = groupKeyOf(k);
+      // collect every not-yet-placed stop in this group, in nearest-neighbour order
+      const group = ordered.filter((x) => !done.has(x) && groupKeyOf(x) === gk);
+      group.sort((a, b) => houseNum(a) - houseNum(b));
+      group.forEach((x) => { result.push(x); done.add(x); });
+    });
     return result.concat(noCoords);
   };
 
@@ -1586,18 +1596,23 @@ export default function CharityDeliverySystem() {
   });
 
   // Build ONE image containing every driver's card stacked, with an overall totals header.
+  // Build ONE image with drivers laid out as cards in TWO columns. The two-column layout
+  // roughly halves the height vs a single stack, so far more detail survives WhatsApp's
+  // ~4000px downscale limit and the shared image stays sharp.
   const rasteriseAllToPng = () => new Promise((resolve, reject) => {
     try {
-      const width = 620;
-      const rowH = 70;
-      const driverHeaderH = 70;
-      const driverTotalsH = 64;
-      const driverGap = 34;
+      const colW = 600;           // width of one driver column
+      const colGap = 24;          // gap between the two columns
+      const width = colW * 2 + colGap + 32; // total canvas width (two columns + margins)
+      const rowH = 64;
+      const driverHeaderH = 56;
+      const driverTotalsH = 56;
+      const driverGap = 30;
       const grandHeaderH = 110;
 
       const driverNames = Object.keys(allocations).filter((d) => d !== '__unassigned' && allocations[d] && allocations[d].length > 0);
 
-      // grand totals + per-driver totals (for the summary table)
+      // grand + per-driver totals
       let gStops = 0, gC = 0, gM = 0, gP = 0;
       const perDriver = {};
       driverNames.forEach((d) => {
@@ -1611,30 +1626,34 @@ export default function CharityDeliverySystem() {
       });
       const showPies = gP > 0;
 
-      // summary table sizing (in the grand header area)
       const tableRowH = 26;
       const tableH = 30 + (driverNames.length + 1) * tableRowH + 16;
       const grandHeaderTotalH = grandHeaderH + tableH;
 
-      // total height
-      let totalH = grandHeaderTotalH;
-      driverNames.forEach((d) => {
-        totalH += driverHeaderH + (allocations[d].length * rowH) + driverTotalsH + driverGap;
-      });
-      totalH += 20;
+      // Height of one driver's card
+      const cardHeight = (d) => driverHeaderH + (allocations[d].length * rowH) + driverTotalsH + driverGap;
 
-      // WhatsApp downscales images whose longest side exceeds ~4000px, which blurs text.
-      // Render at the scale that lands the tall dimension right at that budget, so WhatsApp
-      // keeps it as-is instead of destructively shrinking a much larger image.
-      const MAX_DIM = 4000;
+      // Distribute drivers across two columns balancing total height (greedy: tallest first
+      // to the shorter column). Keeps the two columns roughly equal so the image isn't lopsided.
+      const colHeights = [0, 0];
+      const colDrivers = [[], []];
+      driverNames.slice().sort((a, b) => cardHeight(b) - cardHeight(a)).forEach((d) => {
+        const target = colHeights[0] <= colHeights[1] ? 0 : 1;
+        colDrivers[target].push(d);
+        colHeights[target] += cardHeight(d);
+      });
+      const bodyH = Math.max(colHeights[0], colHeights[1]);
+      const totalH = grandHeaderTotalH + bodyH + 20;
+
+      // Scale so the tall dimension stays within WhatsApp's keep-as-is budget.
+      const MAX_DIM = 3800;
       let scale = 2;
       if (totalH * scale > MAX_DIM) scale = MAX_DIM / totalH;
-      // (scale may be below 1 for very tall images; that's fine — it still beats WhatsApp
-      // downscaling a 10000px image to ~4000px, because we control the text rendering here.)
+      if (width * scale > MAX_DIM) scale = Math.min(scale, MAX_DIM / width);
 
       const canvas = document.createElement('canvas');
-      canvas.width = width * scale;
-      canvas.height = totalH * scale;
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(totalH * scale);
       const ctx = canvas.getContext('2d');
       ctx.scale(scale, scale);
       ctx.fillStyle = '#ffffff';
@@ -1687,71 +1706,66 @@ export default function CharityDeliverySystem() {
         ty += tableRowH;
       });
 
-      let y = grandHeaderTotalH + 8;
-
-      driverNames.forEach((d, di) => {
+      // Draw one driver's card at (ox, oy) within column width colW. Returns the height used.
+      const drawDriver = (d, ox, oy) => {
+        let y = oy;
         const keys = orderStops(allocations[d]);
         let dC = 0, dM = 0, dP = 0;
         keys.forEach((key) => { const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 }; dC += c.chicken; dM += c.meat; dP += c.pies; });
 
-        // bold RED divider marking the start of each driver
-        ctx.strokeStyle = '#c62828';
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(8, y - 10);
-        ctx.lineTo(width - 8, y - 10);
-        ctx.stroke();
+        // bold RED divider at the top of the card
+        ctx.strokeStyle = '#c62828'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(ox, y - 8); ctx.lineTo(ox + colW, y - 8); ctx.stroke();
 
-        // driver header
         ctx.fillStyle = '#222222';
         ctx.font = 'bold 18px Arial, sans-serif';
-        ctx.fillText(d, 16, y);
+        ctx.fillText(fit(d, colW - 120), ox, y);
         ctx.font = '13px Arial, sans-serif';
         ctx.fillStyle = '#666666';
-        ctx.fillText(keys.length + ' stops', 16, y + 26);
-        ctx.strokeStyle = '#333333';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(16, y + driverHeaderH - 8);
-        ctx.lineTo(width - 16, y + driverHeaderH - 8);
-        ctx.stroke();
+        ctx.fillText(keys.length + ' stops', ox, y + 24);
+        ctx.strokeStyle = '#333333'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(ox, y + driverHeaderH - 8); ctx.lineTo(ox + colW, y + driverHeaderH - 8); ctx.stroke();
         y += driverHeaderH;
 
         keys.forEach((key, idx) => {
           const a = addresses[key] || {};
           const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
-          if (idx % 2 === 1) { ctx.fillStyle = '#e3edf7'; ctx.fillRect(8, y - 6, width - 16, rowH); }
+          if (idx % 2 === 1) { ctx.fillStyle = '#e3edf7'; ctx.fillRect(ox - 4, y - 6, colW + 8, rowH); }
           ctx.fillStyle = '#111111';
           ctx.font = 'bold 15px Arial, sans-serif';
-          ctx.fillText(fit((a.fullAddress || key) + (a.postcode ? '  ' + a.postcode : ''), width - 32), 16, y);
+          ctx.fillText(fit((a.fullAddress || key) + (a.postcode ? '  ' + a.postcode : ''), colW - 8), ox, y);
           ctx.font = '14px Arial, sans-serif';
           ctx.fillStyle = '#333333';
-          ctx.fillText('Chicken: ' + c.chicken + '    Meat: ' + c.meat + (showPies ? '    Pies: ' + c.pies : ''), 16, y + 22);
+          ctx.fillText('Chicken: ' + c.chicken + '    Meat: ' + c.meat + (showPies ? '    Pies: ' + c.pies : ''), ox, y + 21);
           if (a.notes) {
             ctx.font = 'bold italic 13px Arial, sans-serif';
             ctx.fillStyle = '#c0392b';
-            ctx.fillText(fit('Note: ' + a.notes, width - 32), 16, y + 44);
+            ctx.fillText(fit('Note: ' + a.notes, colW - 8), ox, y + 42);
           }
-          ctx.strokeStyle = '#e2e2e2';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(16, y + rowH - 8);
-          ctx.lineTo(width - 16, y + rowH - 8);
-          ctx.stroke();
+          ctx.strokeStyle = '#e2e2e2'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(ox, y + rowH - 8); ctx.lineTo(ox + colW, y + rowH - 8); ctx.stroke();
           y += rowH;
         });
 
-        // per-driver totals box
+        // totals box
         y += 4;
         ctx.fillStyle = '#eef6ee';
-        ctx.fillRect(8, y, width - 16, driverTotalsH - 12);
-        ctx.strokeStyle = '#4CAF50';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(8, y, width - 16, driverTotalsH - 12);
+        ctx.fillRect(ox - 4, y, colW + 8, driverTotalsH - 12);
+        ctx.strokeStyle = '#4CAF50'; ctx.lineWidth = 2;
+        ctx.strokeRect(ox - 4, y, colW + 8, driverTotalsH - 12);
         ctx.fillStyle = '#111111';
-        ctx.font = 'bold 15px Arial, sans-serif';
-        ctx.fillText('Collect — Chicken: ' + dC + '   Meat: ' + dM + (showPies ? '   Pies: ' + dP : '') + '   (Stops: ' + keys.length + ')', 20, y + 12);
+        ctx.font = 'bold 14px Arial, sans-serif';
+        ctx.fillText('Collect — Chicken: ' + dC + '   Meat: ' + dM + (showPies ? '   Pies: ' + dP : '') + '   (Stops: ' + keys.length + ')', ox + 6, y + 10);
         y += driverTotalsH - 12 + driverGap;
+        return y - oy;
+      };
+
+      // Render the two columns
+      const startY = grandHeaderTotalH + 12;
+      const colX = [16, 16 + colW + colGap];
+      [0, 1].forEach((ci) => {
+        let y = startY;
+        colDrivers[ci].forEach((d) => { y += drawDriver(d, colX[ci], y + 8); });
       });
 
       canvas.toBlob((blob) => {
@@ -1791,11 +1805,11 @@ export default function CharityDeliverySystem() {
     }
   };
 
-  // Shorten a long URL via is.gd (free, no key). Falls back to the original on any failure
-  // so the route link always works even if the shortener is down.
+  // Shorten a long URL via TinyURL (free, no key, CORS-friendly from the browser).
+  // Falls back to the original on any failure so the route link always works.
   const shortenUrl = async (longUrl) => {
     try {
-      const resp = await fetch('https://is.gd/create.php?format=simple&url=' + encodeURIComponent(longUrl));
+      const resp = await fetch('https://tinyurl.com/api-create.php?url=' + encodeURIComponent(longUrl));
       if (!resp.ok) return longUrl;
       const short = (await resp.text()).trim();
       return short.startsWith('http') ? short : longUrl;
