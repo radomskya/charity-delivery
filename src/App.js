@@ -1074,17 +1074,26 @@ export default function CharityDeliverySystem() {
       avail.forEach(d => { if(result[d].length>result[maxD].length)maxD=d; if(result[d].length<result[minD].length)minD=d; });
       if (result[maxD].length - result[minD].length <= 1) break;
       const minC = cent(minD);
-      // candidate movable addresses on maxD: not preferred-locked, not avoiding minD
-      let bestKey=null, bestDist=Infinity;
+      const maxC = cent(maxD);
+      // Choose the address to move by GAIN: how much closer it is to the receiving
+      // driver's area than to its current driver's area. This moves outliers (poor fit
+      // where they are, good fit where they'd go) rather than well-placed addresses.
+      let bestKey=null, bestGain=-Infinity;
       result[maxD].forEach(key => {
         if (isLocked(key)) return;
         if (((addrInfo(key).avoidDrivers)||[]).includes(minD)) return;
         const a = addrInfo(key);
-        const dd = (minC && typeof a.lat==='number') ? dist2(a, minC) : 0;
-        if (dd < bestDist) { bestDist = dd; bestKey = key; }
+        if (typeof a.lat !== 'number') {
+          // no coords: neutral gain, still movable to satisfy balance
+          if (bestGain < 0) { bestGain = 0; bestKey = key; }
+          return;
+        }
+        const distToCurrent = maxC ? dist2(a, maxC) : 0;
+        const distToNew = minC ? dist2(a, minC) : 0;
+        const gain = distToCurrent - distToNew; // high = far from current, close to new
+        if (gain > bestGain) { bestGain = gain; bestKey = key; }
       });
       if (!bestKey) {
-        // maxD has nothing movable to minD; try any over-loaded driver -> minD
         let moved = false;
         const overs = avail.slice().sort((a,b)=>result[b].length-result[a].length);
         for (const od of overs) {
@@ -2055,7 +2064,7 @@ export default function CharityDeliverySystem() {
                   const zeroThisWeek = !excluded && total === 0;
                   return (
                     <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: excluded ? '#fafafa' : (zeroThisWeek ? '#f7f7f7' : (calc && calc.overridden ? '#fffde7' : 'white')), opacity: zeroThisWeek ? 0.75 : 1 }}>
-                      <strong style={{ textDecoration: excluded ? 'line-through' : 'none' }}>{addresses[key].fullAddress}</strong>
+                      <strong style={{ textDecoration: excluded ? 'line-through' : 'none' }}>{addresses[key].fullAddress}{addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong>
                       {calc && calc.overridden && !excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#f57f17', fontWeight: 'bold' }}>✎ overridden this week</span>}
                       {excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#999', fontWeight: 'bold' }}>excluded this week</span>}
                       {zeroThisWeek && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#999' }}>no items this week (you can add a one-off below)</span>}
@@ -2206,7 +2215,7 @@ export default function CharityDeliverySystem() {
                         return (
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong>{addresses[key] && addresses[key].postcode && <span style={{ marginLeft: '6px', color: '#777', fontSize: '12px' }}>{addresses[key].postcode}</span>}</div>
+                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong></div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
                             </div>
@@ -2229,7 +2238,7 @@ export default function CharityDeliverySystem() {
                         return (
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}</strong>{addresses[key] && addresses[key].postcode && <span style={{ marginLeft: '6px', color: '#777', fontSize: '12px' }}>{addresses[key].postcode}</span>}</div>
+                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong></div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
                             </div>
