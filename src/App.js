@@ -41,6 +41,7 @@ export default function CharityDeliverySystem() {
 
   // UI Navigation
   const [activeTab, setActiveTab] = useState('addresses');
+  const [addressSearch, setAddressSearch] = useState('');
   const [showAddAddress, setShowAddAddress] = useState(false);
   const [showAddDriver, setShowAddDriver] = useState(false);
   const [editingDriverName, setEditingDriverName] = useState('');
@@ -91,6 +92,7 @@ export default function CharityDeliverySystem() {
   const [deliveryHistory, setDeliveryHistory] = useState({});
   const [deliveryMessage, setDeliveryMessage] = useState('📦 DELIVERY LIST FOR {DRIVER}\n📅 Week of: {DATE}\n🚗 Total stops: {STOPS}');
   const [butcherEmailTemplate, setButcherEmailTemplate] = useState('Hi,\n\nPlease prepare the following for collection on {DATE}:\n\n🍗 Chicken: {CHICKEN}\n🍖 Meat: {MEAT}\n🥧 Pies: {PIES}\n\nThank you!');
+  const [butcherEmailAddress, setButcherEmailAddress] = useState('');
 
   // UI feedback
   const [copiedMessage, setCopiedMessage] = useState('');
@@ -142,6 +144,7 @@ export default function CharityDeliverySystem() {
         setPollMessage(data.pollMessage || pollMessage);
         setDeliveryMessage(data.deliveryMessage || deliveryMessage);
         setButcherEmailTemplate(data.butcherEmailTemplate || butcherEmailTemplate);
+        setButcherEmailAddress(data.butcherEmailAddress || '');
         setCutoffDay(data.cutoffDay || 'thursday');
         setCutoffHour(data.cutoffHour || '08');
         setCutoffMinute(data.cutoffMinute || '00');
@@ -204,7 +207,7 @@ export default function CharityDeliverySystem() {
   useEffect(() => {
     const timer = setTimeout(saveData, 1000);
     return () => clearTimeout(timer);
-  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, activePollId, broughtForwardTotal, deliveryHistory, selectedDate, deliveryType, user]);
+  }, [addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, butcherEmailAddress, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, activePollId, broughtForwardTotal, deliveryHistory, selectedDate, deliveryType, user]);
 
   // ============================================================================
   // DATE HELPERS (pure, usable from load before state is set)
@@ -761,6 +764,7 @@ export default function CharityDeliverySystem() {
       addresses, drivers, driverPhones, driverPreferences,
       anchorDate, anchorWeek, anchorFirstOfMonth,
       pollMessage, deliveryMessage, butcherEmailTemplate,
+      butcherEmailAddress: butcherEmailAddress || null,
       cutoffDay, cutoffHour, cutoffMinute, forceUKTime,
       broughtForwardTotal, deliveryHistory,
       exportedAt: new Date().toISOString()
@@ -1067,9 +1071,11 @@ export default function CharityDeliverySystem() {
   // PER-DRIVER SEND (image via Web Share, route link)
   // ============================================================================
 
-  const buildRouteLink = (keys) => {
-    // Order stops by a nearest-neighbour path so the route is geographically sensible
-    // (Google Maps follows the order given; it doesn't reorder waypoints itself).
+  // Order a list of address keys by a nearest-neighbour path (start at first stop,
+  // always go to the closest unvisited next). Un-geocoded stops go at the end.
+  // This is the single source of truth for driving order, used in the review, the
+  // driver image, and the Google Maps route link so they all match.
+  const orderStops = (keys) => {
     const withCoords = keys.filter((k) => {
       const a = addresses[k] || {};
       return typeof a.lat === 'number' && typeof a.lng === 'number';
@@ -1085,7 +1091,7 @@ export default function CharityDeliverySystem() {
     let ordered = [];
     if (withCoords.length > 0) {
       const remaining = withCoords.slice();
-      let current = remaining.shift(); // start at the first stop
+      let current = remaining.shift();
       ordered.push(current);
       while (remaining.length > 0) {
         const cur = addresses[current];
@@ -1098,17 +1104,22 @@ export default function CharityDeliverySystem() {
         ordered.push(current);
       }
     }
-    ordered = ordered.concat(noCoords); // any un-geocoded stops at the end
+    return ordered.concat(noCoords);
+  };
 
+  const buildRouteLink = (keys) => {
+    const ordered = orderStops(keys);
     const parts = ordered.map((key) => {
       const a = addresses[key] || {};
-      if (typeof a.lat === 'number' && typeof a.lng === 'number') {
-        return `${a.lat},${a.lng}`;
-      }
-      return encodeURIComponent(a.fullAddress || key);
+      // Use the full address text (plus postcode) so Google Maps resolves the actual
+      // door, not the postcode-centroid coordinate. Much more useful for the driver.
+      const text = (a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : '');
+      return encodeURIComponent(text.trim());
     });
     if (parts.length === 0) return '';
-    return 'https://www.google.com/maps/dir/' + parts.join('/');
+    // Empty first segment = "my current location", so Google routes the driver from
+    // wherever they are, through the stops in order.
+    return 'https://www.google.com/maps/dir/' + '/' + parts.join('/');
   };
 
   const buildDriverCaption = (driverName, keys) => {
@@ -1156,8 +1167,9 @@ export default function CharityDeliverySystem() {
 
   // Rasterise the XHTML into a PNG blob via SVG foreignObject + canvas
   // Draw the delivery list directly onto a canvas (reliable on all phones - no foreignObject).
-  const rasteriseToPng = (driverName, keys) => new Promise((resolve, reject) => {
+  const rasteriseToPng = (driverName, rawKeys) => new Promise((resolve, reject) => {
     try {
+      const keys = orderStops(rawKeys); // driving order
       const scale = 2; // retina-quality
       const width = 620;
       const headerH = 96;
@@ -1172,6 +1184,7 @@ export default function CharityDeliverySystem() {
         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
         totC += c.chicken; totM += c.meat; totP += c.pies;
       });
+      const showPies = totP > 0; // only show the Pies column if any are ordered this round
 
       const canvas = document.createElement('canvas');
       canvas.width = width * scale;
@@ -1227,7 +1240,7 @@ export default function CharityDeliverySystem() {
         // quantities, full words
         ctx.font = '14px Arial, sans-serif';
         ctx.fillStyle = '#333333';
-        const qty = 'Chicken: ' + c.chicken + '    Meat: ' + c.meat + '    Pies: ' + c.pies;
+        const qty = 'Chicken: ' + c.chicken + '    Meat: ' + c.meat + (showPies ? '    Pies: ' + c.pies : '');
         ctx.fillText(qty, 16, y + 22);
 
         // notes
@@ -1259,7 +1272,7 @@ export default function CharityDeliverySystem() {
       ctx.fillText('TOTAL TO COLLECT', 20, y + 10);
       ctx.font = 'bold 17px Arial, sans-serif';
       ctx.fillStyle = '#111111';
-      ctx.fillText('Chicken: ' + totC + '      Meat: ' + totM + '      Pies: ' + totP, 20, y + 32);
+      ctx.fillText('Chicken: ' + totC + '      Meat: ' + totM + (showPies ? '      Pies: ' + totP : ''), 20, y + 32);
 
       canvas.toBlob((blob) => {
         if (blob) resolve(blob); else reject(new Error('Could not create image'));
@@ -1316,20 +1329,24 @@ export default function CharityDeliverySystem() {
         <h1>🍽️ Charity Delivery Coordinator</h1>
         <p>Admin Access Only</p>
         {authError && <div style={{ color: 'red', marginBottom: '10px' }}>{authError}</div>}
-        <input type="email" placeholder="Email" value={loginEmail}
-          onChange={(e) => setLoginEmail(e.target.value)}
-          style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
-        <input type="password" placeholder="Password" value={loginPassword}
-          onChange={(e) => setLoginPassword(e.target.value)}
-          style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
-        <button
-          onClick={() => {
+        <form onSubmit={(e) => {
+            e.preventDefault();
             signInWithEmailAndPassword(auth, loginEmail, loginPassword)
               .catch((error) => setAuthError(error.message));
-          }}
-          style={{ width: '100%', padding: '10px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}>
-          Login
-        </button>
+          }}>
+          <input type="email" placeholder="Email" value={loginEmail}
+            name="email" autoComplete="username"
+            onChange={(e) => setLoginEmail(e.target.value)}
+            style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
+          <input type="password" placeholder="Password" value={loginPassword}
+            name="password" autoComplete="current-password"
+            onChange={(e) => setLoginPassword(e.target.value)}
+            style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
+          <button type="submit"
+            style={{ width: '100%', padding: '10px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer' }}>
+            Login
+          </button>
+        </form>
       </div>
     );
   }
@@ -1517,7 +1534,22 @@ export default function CharityDeliverySystem() {
           )}
 
           <div style={{ marginTop: '15px' }}>
-            {Object.keys(addresses).map((key) => {
+            <input type="text" value={addressSearch} onChange={(e) => setAddressSearch(e.target.value)}
+              placeholder="🔍 Search addresses by name or postcode..."
+              style={{ width: '100%', padding: '10px', marginBottom: '12px', boxSizing: 'border-box', fontSize: '14px' }} />
+            {(() => {
+              const term = addressSearch.trim().toLowerCase();
+              const allKeys = Object.keys(addresses);
+              const keys = term
+                ? allKeys.filter((k) => {
+                    const a = addresses[k] || {};
+                    return (a.fullAddress || '').toLowerCase().includes(term) || (a.postcode || '').toLowerCase().includes(term);
+                  })
+                : allKeys;
+              if (term && keys.length === 0) {
+                return <p style={{ color: '#888', fontSize: '13px' }}>No addresses match "{addressSearch}".</p>;
+              }
+              return keys.map((key) => {
               const a = addresses[key];
               const held = isOnHold(a, selectedDate);
               return (
@@ -1545,7 +1577,8 @@ export default function CharityDeliverySystem() {
                   </div>
                 </div>
               );
-            })}
+              });
+            })()}
           </div>
         </div>
       )}
@@ -1761,6 +1794,11 @@ export default function CharityDeliverySystem() {
                 style={{ marginTop: '10px', padding: '8px 16px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>
                 Copy Email
               </button>
+              <a href={`mailto:${encodeURIComponent(butcherEmailAddress)}?subject=${encodeURIComponent('Delivery order for ' + formatUKDate(selectedDate))}&body=${encodeURIComponent(emailTemplate)}`}
+                style={{ marginTop: '10px', marginLeft: '10px', padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer', textDecoration: 'none', display: 'inline-block' }}>
+                ✉️ Open in Email
+              </a>
+              {!butcherEmailAddress && <p style={{ fontSize: '12px', color: '#888', marginTop: '8px' }}>Tip: add the butcher's email address in Settings to pre-fill the recipient.</p>}
               {copiedMessage && <span style={{ marginLeft: '10px', color: 'green' }}>{copiedMessage}</span>}
             </>
           ) : (<p>Select a delivery date in the Poll tab first.</p>)}
@@ -1856,7 +1894,7 @@ export default function CharityDeliverySystem() {
                     <div key={driver} style={{ border: '1px solid #ddd', borderRadius: '4px', padding: '12px', marginBottom: '12px' }}>
                       <strong>{driver}</strong> <span style={{ color: '#666', fontSize: '13px' }}>({proposedAllocation[driver].length} stops)</span>
                       {proposedAllocation[driver].length === 0 && <p style={{ fontSize: '12px', color: '#999', margin: '6px 0 0 0' }}>No stops</p>}
-                      {proposedAllocation[driver].map((key) => {
+                      {orderStops(proposedAllocation[driver]).map((key) => {
                         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
                         return (
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0', gap: '10px' }}>
@@ -1946,7 +1984,7 @@ export default function CharityDeliverySystem() {
                     </div>
 
                     <div style={{ marginTop: '10px', marginBottom: '10px' }}>
-                      {keys.map((key) => {
+                      {orderStops(keys).map((key) => {
                         const a = addresses[key] || {};
                         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
                         return (
@@ -2028,6 +2066,10 @@ export default function CharityDeliverySystem() {
           <p style={{ fontSize: '12px', color: '#666', marginTop: '-5px', marginBottom: '15px' }}>
             Use {'{DRIVER}'}, {'{DATE}'}, and {'{STOPS}'} as placeholders.
           </p>
+          <label>Butcher Email Address:</label>
+          <input type="email" value={butcherEmailAddress} onChange={(e) => setButcherEmailAddress(e.target.value)}
+            style={{ width: '100%', padding: '8px', marginBottom: '15px', boxSizing: 'border-box' }}
+            placeholder="butcher@example.com" />
           <label>Butcher Email Template:</label>
           <textarea value={butcherEmailTemplate} onChange={(e) => setButcherEmailTemplate(e.target.value)}
             style={{ width: '100%', minHeight: '120px', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }}
