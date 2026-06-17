@@ -876,7 +876,22 @@ export default function CharityDeliverySystem() {
   };
 
   const toggleDriverAvailable = (name) => {
-    setAvailableDrivers(prev => ({ ...prev, [name]: !prev[name] }));
+    const newValue = !availableDrivers[name];
+    // Update local state immediately for responsiveness.
+    setAvailableDrivers(prev => ({ ...prev, [name]: newValue }));
+    // If a poll is live, record this as a vote in the poll itself, tagged as admin-set.
+    // Keyed by the driver's phone hash (same key a real vote uses), so the driver's own
+    // later vote overwrites it. If no phone, fall back to a name-based key.
+    if (activePollId && db) {
+      const phone = driverPhones[name];
+      const key = (phone && normalisePhone(phone)) ? hashPhone(phone) : ('admin_' + name.replace(/[^a-zA-Z0-9]/g, '_'));
+      set(ref(db, `polls/${activePollId}/votes/${key}`), {
+        name,
+        available: newValue,
+        at: new Date().toISOString(),
+        by: 'admin'
+      }).catch((err) => console.error('Could not record manual availability:', err));
+    }
   };
 
   // ============================================================================
@@ -1885,7 +1900,11 @@ export default function CharityDeliverySystem() {
                 names.forEach((name) => {
                   let v = null;
                   Object.values(pollVotes).forEach(x => { if (x && x.name === name) v = x.available; });
-                  if (v === true) yes++; else if (v === false) no++; else waiting++;
+                  // "Available" = currently ticked (reflects votes + any admin override).
+                  if (availableDrivers[name]) yes++;
+                  else if (v === false) no++;
+                  else if (v === true) no++; // voted yes but currently unticked -> excluded
+                  else waiting++;
                 });
                 return (
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '15px' }}>
@@ -1919,16 +1938,19 @@ export default function CharityDeliverySystem() {
               <div style={{ marginBottom: '20px' }}>
                 {Object.keys(drivers).length === 0 && <p style={{ color: '#999' }}>Add drivers first.</p>}
                 {Object.keys(drivers).map((name) => {
-                  // find this driver's vote
-                  let voted = null;
-                  Object.values(pollVotes).forEach(v => { if (v && v.name === name) voted = v.available; });
+                  // find this driver's vote (and whether it was admin-set)
+                  let voted = null, byAdmin = false;
+                  Object.values(pollVotes).forEach(v => { if (v && v.name === name) { voted = v.available; byAdmin = v.by === 'admin'; } });
+                  const ticked = !!availableDrivers[name];
                   return (
                     <label key={name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0' }}>
-                      <input type="checkbox" checked={!!availableDrivers[name]} onChange={() => toggleDriverAvailable(name)} />
+                      <input type="checkbox" checked={ticked} onChange={() => toggleDriverAvailable(name)} />
                       <strong>{name}</strong>
-                      {voted === true && <span style={{ fontSize: '12px', color: 'green' }}>✓ voted available</span>}
-                      {voted === false && <span style={{ fontSize: '12px', color: '#c62828' }}>✗ voted not available</span>}
+                      {voted === true && !byAdmin && <span style={{ fontSize: '12px', color: 'green' }}>✓ voted available</span>}
+                      {voted === false && !byAdmin && <span style={{ fontSize: '12px', color: '#c62828' }}>✗ voted not available</span>}
                       {voted === null && <span style={{ fontSize: '12px', color: '#999' }}>no vote</span>}
+                      {byAdmin && voted === true && <span style={{ fontSize: '12px', color: '#81c784', fontWeight: 'bold' }}>✚ available (by admin manually)</span>}
+                      {byAdmin && voted === false && <span style={{ fontSize: '12px', color: '#e57373', fontWeight: 'bold' }}>✚ not available (by admin manually)</span>}
                     </label>
                   );
                 })}
