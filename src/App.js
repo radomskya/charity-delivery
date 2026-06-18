@@ -1578,14 +1578,20 @@ export default function CharityDeliverySystem() {
     const parts = [];
     ordered.forEach((key) => {
       const a = addresses[key] || {};
-      const full = (a.fullAddress || key);
-      // A pure house NAME with no number anywhere (e.g. "Cairndrum, Elstree Hill South")
-      // can fail to geocode in Google's directions, so for those we use coordinates which
-      // always resolve. Everything with a number uses the full address text + postcode,
-      // which reliably resolves the actual door (dropping the street name breaks it).
-      const hasAnyNumber = /\d/.test(full);
+      const fullRaw = (a.fullAddress || key);
+      // For the MAP ROUTE only, strip a leading "Flat N" so Google searches on the building
+      // name / street (which it resolves far more reliably than a flat number). The flat
+      // number is still shown to the driver in their delivery list. E.g.
+      //   "Flat 18, Granger Court, Whitehall Close" -> "Granger Court, Whitehall Close"
+      //   "Flat 2, 1 Beech Drive"                   -> "1 Beech Drive"
+      const full = fullRaw.replace(/^\s*flat\s*\d+[a-z]?\s*,?\s*/i, '');
+      // A pure house NAME with no number anywhere in the ORIGINAL address (e.g.
+      // "Cairndrum, Elstree Hill South") can fail to geocode in Google's directions, so for
+      // those we use coordinates which always resolve. Stripped flats (e.g. "Granger Court")
+      // keep their building-name text — Google resolves a named building + postcode fine.
+      const originalHasNumber = /\d/.test(fullRaw);
       let waypoint;
-      if (!hasAnyNumber && typeof a.lat === 'number' && typeof a.lng === 'number') {
+      if (!originalHasNumber && typeof a.lat === 'number' && typeof a.lng === 'number') {
         waypoint = a.lat + ',' + a.lng;
       } else {
         const text = full.replace(/,\s*$/, '') + (a.postcode ? ', ' + a.postcode : '');
