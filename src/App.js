@@ -1574,7 +1574,9 @@ export default function CharityDeliverySystem() {
 
   const buildRouteLink = (keys) => {
     const ordered = orderStops(keys);
-    const parts = ordered.map((key) => {
+    const seen = new Set();
+    const parts = [];
+    ordered.forEach((key) => {
       const a = addresses[key] || {};
       const full = (a.fullAddress || key);
       // A pure house NAME with no number anywhere (e.g. "Cairndrum, Elstree Hill South")
@@ -1582,11 +1584,26 @@ export default function CharityDeliverySystem() {
       // always resolve. Everything with a number uses the full address text + postcode,
       // which reliably resolves the actual door (dropping the street name breaks it).
       const hasAnyNumber = /\d/.test(full);
+      let waypoint;
       if (!hasAnyNumber && typeof a.lat === 'number' && typeof a.lng === 'number') {
-        return a.lat + ',' + a.lng;
+        waypoint = a.lat + ',' + a.lng;
+      } else {
+        const text = full.replace(/,\s*$/, '') + (a.postcode ? ', ' + a.postcode : '');
+        waypoint = encodeURIComponent(text.trim());
       }
-      const text = full.replace(/,\s*$/, '') + (a.postcode ? ', ' + a.postcode : '');
-      return encodeURIComponent(text.trim());
+      // Collapse stops that are truly the SAME doorstep (e.g. two families at the same
+      // building, like two "204 Colleridge Way" flats). The mobile Google Maps app breaks
+      // when given two stops at the same point. We only merge when BOTH the house/flat
+      // number AND the coordinates match — so different houses on a street that happen to
+      // share a geocoded point (e.g. 158 vs 204) are NOT merged. Both families still appear
+      // in the driver's delivery list; this only affects the map route.
+      const houseNum = (full.match(/\d+[a-z]?/i) || [''])[0].toLowerCase();
+      const coordPart = (typeof a.lat === 'number' && typeof a.lng === 'number')
+        ? a.lat.toFixed(5) + ',' + a.lng.toFixed(5) : '';
+      const dedupKey = (houseNum || coordPart) ? (houseNum + '@' + coordPart) : waypoint;
+      if (seen.has(dedupKey)) return;
+      seen.add(dedupKey);
+      parts.push(waypoint);
     });
     if (parts.length === 0) return '';
     // Empty first segment = "my current location", so Google routes the driver from
