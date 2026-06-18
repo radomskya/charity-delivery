@@ -705,9 +705,50 @@ export default function CharityDeliverySystem() {
     };
 
     const newAddresses = { ...addresses };
-    // If editing and the address text changed, remove the old key
-    if (editingAddress.originalKey && editingAddress.originalKey !== key) {
-      delete newAddresses[editingAddress.originalKey];
+    // If editing and the address text changed, remove the old key AND migrate every
+    // reference to it (allocation, proposed allocation, week overrides) to the new key —
+    // otherwise the renamed address looks "lost" from the allocation and shows zero orders.
+    const oldKey = editingAddress.originalKey;
+    if (oldKey && oldKey !== key) {
+      delete newAddresses[oldKey];
+
+      // migrate approved/locked allocation
+      if (allocations && typeof allocations === 'object') {
+        const migrated = {};
+        let changed = false;
+        Object.keys(allocations).forEach((driver) => {
+          const list = allocations[driver];
+          if (Array.isArray(list)) {
+            migrated[driver] = list.map((k) => { if (k === oldKey) { changed = true; return key; } return k; });
+          } else { migrated[driver] = list; }
+        });
+        if (changed) setAllocations(migrated);
+      }
+      // migrate the in-progress proposed allocation
+      if (proposedAllocation && typeof proposedAllocation === 'object') {
+        const migratedP = {};
+        let changedP = false;
+        Object.keys(proposedAllocation).forEach((driver) => {
+          const list = proposedAllocation[driver];
+          if (Array.isArray(list)) {
+            migratedP[driver] = list.map((k) => { if (k === oldKey) { changedP = true; return key; } return k; });
+          } else { migratedP[driver] = list; }
+        });
+        if (changedP) setProposedAllocation(migratedP);
+      }
+      // migrate per-date week overrides (excluded / one-off quantities)
+      if (weekOverrides && typeof weekOverrides === 'object') {
+        const migratedW = JSON.parse(JSON.stringify(weekOverrides));
+        let changedW = false;
+        Object.keys(migratedW).forEach((dateStr) => {
+          if (migratedW[dateStr] && migratedW[dateStr][oldKey] !== undefined) {
+            migratedW[dateStr][key] = migratedW[dateStr][oldKey];
+            delete migratedW[dateStr][oldKey];
+            changedW = true;
+          }
+        });
+        if (changedW) setWeekOverrides(migratedW);
+      }
     }
     newAddresses[key] = newAddress;
     setAddresses(newAddresses);
@@ -1535,9 +1576,29 @@ export default function CharityDeliverySystem() {
     const ordered = orderStops(keys);
     const parts = ordered.map((key) => {
       const a = addresses[key] || {};
-      // Use the full address text (plus postcode) so Google Maps resolves the actual
-      // door, not the postcode-centroid coordinate. Much more useful for the driver.
-      const text = (a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : '');
+      const full = (a.fullAddress || key);
+      const flatMatch = full.match(/^\s*flat\s*\d+[a-z]?\b/i);
+      const stripped = full.replace(/^\s*flat\s*\d+,?\s*/i, '');
+      const numMatch = stripped.match(/^\s*(\d+[a-z]?)\b/i);
+      // A flat in a NAMED building (e.g. "Flat 18, Granger Court, Whitehall Close") →
+      // keep the flat + building name + postcode as text; the building name is what the
+      // driver needs and the postcode makes Google resolve it.
+      if (flatMatch && !numMatch && a.postcode) {
+        // use up to the building/street part + postcode (drop trailing town fluff lightly)
+        return encodeURIComponent((full.replace(/,\s*$/, '') + ' ' + a.postcode).trim());
+      }
+      // A normal numbered address (e.g. "204 Colleridge Way", or "Flat 2, 1 Beech Drive"
+      // where the building has a number) → "number + postcode": reliable door resolution,
+      // immune to duplicate/misspelled free-text (e.g. two "204 Colleridge Way" entries).
+      if (numMatch && a.postcode) {
+        return encodeURIComponent((numMatch[1] + ' ' + a.postcode).trim());
+      }
+      // No usable number and not a named-building flat (a pure house name like "Cairndrum")
+      // → use coordinates so it always geocodes and never gets stuck.
+      if (typeof a.lat === 'number' && typeof a.lng === 'number') {
+        return a.lat + ',' + a.lng;
+      }
+      const text = full + (a.postcode ? ' ' + a.postcode : '');
       return encodeURIComponent(text.trim());
     });
     if (parts.length === 0) return '';
