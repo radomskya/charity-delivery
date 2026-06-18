@@ -48,7 +48,18 @@ export default function CharityDeliverySystem() {
   const [adminUsersError, setAdminUsersError] = useState('');
 
   // UI Navigation
-  const [activeTab, setActiveTab] = useState('summary');
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('activeTab');
+      return saved || 'summary';
+    } catch (e) {
+      return 'summary';
+    }
+  });
+  // Remember the current tab per-device so a refresh returns to where you were.
+  useEffect(() => {
+    try { window.localStorage.setItem('activeTab', activeTab); } catch (e) {}
+  }, [activeTab]);
   const [addressSearch, setAddressSearch] = useState('');
   const [availabilityEditMode, setAvailabilityEditMode] = useState(false);
   const [showAddAddress, setShowAddAddress] = useState(false);
