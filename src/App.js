@@ -976,6 +976,13 @@ export default function CharityDeliverySystem() {
       // previous poll so nobody shows as "available" until they actually vote in this poll.
       setAvailableDrivers({});
       setPollVotes({});
+      // Also clear and UNLOCK the previous week's allocation, so it doesn't linger as an
+      // approved/locked plan against the new poll. The new allocation is built fresh once
+      // votes are in.
+      setAllocations({});
+      setProposedAllocation({});
+      setAllocationApproved(false);
+      setAutoAllocated(false);
     }).catch((err) => {
       alert('Could not open poll: ' + err.message);
     });
