@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword } from 'firebase/auth';
+import { initializeApp, deleteApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { getDatabase, ref, set, onValue, get } from 'firebase/database';
 
 // ============================================================================
@@ -40,6 +40,10 @@ export default function CharityDeliverySystem() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authError, setAuthError] = useState('');
+  const [resetSent, setResetSent] = useState(false);
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [userMgmtMsg, setUserMgmtMsg] = useState('');
+  const [userMgmtBusy, setUserMgmtBusy] = useState(false);
 
   // UI Navigation
   const [activeTab, setActiveTab] = useState('addresses');
@@ -1275,6 +1279,45 @@ export default function CharityDeliverySystem() {
     });
   };
 
+  // Invite a new admin: create their account (so it exists) then send them a reset email
+  // so THEY set their own password. We use a SECONDARY Firebase app instance so creating
+  // the account doesn't sign the current admin out of their own session.
+  const inviteAdmin = async () => {
+    const email = (newUserEmail || '').trim();
+    if (!email) { setUserMgmtMsg('Enter an email address.'); return; }
+    setUserMgmtBusy(true);
+    setUserMgmtMsg('');
+    let secondaryApp = null;
+    try {
+      // random temporary password — the user never needs it; they set their own via email
+      const tempPwd = 'Tmp-' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2).toUpperCase() + '!9';
+      secondaryApp = initializeApp(firebaseConfig, 'invite-' + Date.now());
+      const secondaryAuth = getAuth(secondaryApp);
+      await createUserWithEmailAndPassword(secondaryAuth, email, tempPwd);
+      await signOut(secondaryAuth); // sign out the secondary session immediately
+      // send the new admin a link to set their own password
+      await sendPasswordResetEmail(auth, email);
+      setUserMgmtMsg('✓ Invited ' + email + '. They have been emailed a link to set their password.');
+      setNewUserEmail('');
+    } catch (e) {
+      if (e && e.code === 'auth/email-already-in-use') {
+        // account already exists — just (re)send them a set-password link
+        try {
+          await sendPasswordResetEmail(auth, email);
+          setUserMgmtMsg('That email already has an account — a fresh set-password link has been sent to them.');
+          setNewUserEmail('');
+        } catch (e2) {
+          setUserMgmtMsg('Could not send the email: ' + e2.message);
+        }
+      } else {
+        setUserMgmtMsg('Could not invite: ' + (e && e.message ? e.message : 'unknown error'));
+      }
+    } finally {
+      if (secondaryApp) { try { await deleteApp(secondaryApp); } catch (e) {} }
+      setUserMgmtBusy(false);
+    }
+  };
+
   const approveAllocation = () => {
     const hasUnassigned = proposedAllocation.__unassigned && proposedAllocation.__unassigned.length > 0;
     if (hasUnassigned) {
@@ -2163,6 +2206,16 @@ export default function CharityDeliverySystem() {
             Login
           </button>
         </form>
+        <button onClick={() => {
+            if (!loginEmail) { setAuthError('Enter your email above first, then tap "Forgot password".'); return; }
+            sendPasswordResetEmail(auth, loginEmail)
+              .then(() => { setAuthError(''); setResetSent(true); })
+              .catch((error) => setAuthError(error.message));
+          }}
+          style={{ width: '100%', padding: '8px', marginTop: '10px', backgroundColor: 'transparent', color: '#1565c0', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontSize: '13px' }}>
+          Forgot password?
+        </button>
+        {resetSent && <div style={{ color: '#2e7d32', marginTop: '8px', fontSize: '13px' }}>If an account exists for that email, a password-reset link has been sent. Check your inbox (and spam).</div>}
       </div>
     );
   }
@@ -3064,6 +3117,23 @@ export default function CharityDeliverySystem() {
       {activeTab === 'settings' && (
         <div>
           <h2>⚙️ Settings</h2>
+
+          <h3>👤 Admin Users</h3>
+          <div style={{ backgroundColor: '#e8f5e9', padding: '15px', borderRadius: '4px', marginBottom: '20px', border: '2px solid #66bb6a' }}>
+            <p style={{ marginTop: 0, fontSize: '13px', color: '#555' }}>Invite another admin by email. They'll be emailed a link to set their own password, then they can log in with full access. Everyone added here has the same full access.</p>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input type="email" placeholder="new.admin@example.com" value={newUserEmail}
+                onChange={(e) => setNewUserEmail(e.target.value)}
+                style={{ padding: '8px', fontSize: '14px', flex: '1 1 240px', boxSizing: 'border-box' }} />
+              <button onClick={inviteAdmin} disabled={userMgmtBusy}
+                style={{ padding: '9px 16px', backgroundColor: userMgmtBusy ? '#9e9e9e' : '#2e7d32', color: 'white', border: 'none', cursor: userMgmtBusy ? 'default' : 'pointer', fontWeight: 'bold' }}>
+                {userMgmtBusy ? 'Inviting…' : 'Invite admin'}
+              </button>
+            </div>
+            {userMgmtMsg && <div style={{ marginTop: '10px', fontSize: '13px', color: userMgmtMsg.startsWith('✓') ? '#2e7d32' : '#c62828' }}>{userMgmtMsg}</div>}
+            <p style={{ fontSize: '12px', color: '#888', marginTop: '10px', marginBottom: 0 }}>To remove someone's access, delete their account in the Firebase console (Authentication → Users). Removing access from inside the app isn't available for safety reasons.</p>
+          </div>
+
           <h3>📊 Brought Forward Total</h3>
           <div style={{ backgroundColor: '#f3e5f5', padding: '15px', borderRadius: '4px', marginBottom: '20px', border: '2px solid #ba68c8' }}>
             <p style={{ marginTop: 0, fontSize: '13px', color: '#666' }}>Deliveries completed before you started using this system. This is added to the analytics totals.</p>
