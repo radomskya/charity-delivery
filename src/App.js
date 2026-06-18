@@ -2760,6 +2760,28 @@ export default function CharityDeliverySystem() {
                         style={{ padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer', fontSize: '13px' }}>
                         📋 Copy poll message (with link and deadline)
                       </button>
+                      <button onClick={async () => {
+                          const pollDateStr = activePollId.split('-').slice(0,3).join('-');
+                          const link = `${window.location.origin}/vote.html?poll=${activePollId}`;
+                          const msg = pollMessage
+                            .replace(/\{DATE\}/g, formatUKDate(pollDateStr))
+                            .replace(/\{CUTOFF\}/g, formatCutoff(pollDateStr))
+                            .replace(/\{LINK\}/g, link);
+                          // Prefer the native share sheet (mobile) so the user can pick WhatsApp,
+                          // a group, or any app. Fall back to a direct WhatsApp link otherwise.
+                          try {
+                            if (navigator.share) {
+                              await navigator.share({ text: msg });
+                              return;
+                            }
+                          } catch (e) {
+                            if (e && e.name === 'AbortError') return; // user cancelled the share sheet
+                          }
+                          window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+                        }}
+                        style={{ marginLeft: '8px', marginTop: '8px', padding: '8px 16px', backgroundColor: '#25D366', color: 'white', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
+                        📲 Share to WhatsApp
+                      </button>
                     </div>
                     <div style={{ marginTop: '12px' }}>
                       <button onClick={() => {
