@@ -44,9 +44,10 @@ export default function CharityDeliverySystem() {
   const [newUserEmail, setNewUserEmail] = useState('');
   const [userMgmtMsg, setUserMgmtMsg] = useState('');
   const [userMgmtBusy, setUserMgmtBusy] = useState(false);
+  const [adminUsers, setAdminUsers] = useState([{ email: 'avner@radomsky.co.uk', lastSeen: null, invitedAt: null }]);
 
   // UI Navigation
-  const [activeTab, setActiveTab] = useState('addresses');
+  const [activeTab, setActiveTab] = useState('summary');
   const [addressSearch, setAddressSearch] = useState('');
   const [availabilityEditMode, setAvailabilityEditMode] = useState(false);
   const [showAddAddress, setShowAddAddress] = useState(false);
@@ -131,6 +132,39 @@ export default function CharityDeliverySystem() {
       if (currentUser) {
         setUser(currentUser);
         loadUserData(currentUser.uid);
+        // shared admin-user list (top-level node, visible to all admins)
+        if (db) {
+          // record THIS user's login (so others show as "active" once they've signed in)
+          if (currentUser.email) {
+            get(ref(db, 'adminUsers')).then((snap) => {
+              const v = snap.val();
+              let arr = [];
+              if (v) arr = (Array.isArray(v) ? v : Object.values(v)).map((x) => (typeof x === 'string' ? { email: x, lastSeen: null, invitedAt: null } : x)).filter((x) => x && x.email);
+              const meIdx = arr.findIndex((x) => x.email.toLowerCase() === currentUser.email.toLowerCase());
+              const nowISO = new Date().toISOString();
+              if (meIdx >= 0) { arr[meIdx] = { ...arr[meIdx], lastSeen: nowISO }; }
+              else { arr.push({ email: currentUser.email, lastSeen: nowISO, invitedAt: null }); }
+              set(ref(db, 'adminUsers'), arr).catch(() => {});
+            }).catch(() => {});
+          }
+          onValue(ref(db, 'adminUsers'), (snap) => {
+            const v = snap.val();
+            let arr = [];
+            if (v) arr = (Array.isArray(v) ? v : Object.values(v)).map((x) => (typeof x === 'string' ? { email: x, lastSeen: null, invitedAt: null } : x)).filter((x) => x && x.email);
+            // ensure the main admin is always present
+            if (!arr.some((x) => x.email.toLowerCase() === 'avner@radomsky.co.uk')) {
+              arr.unshift({ email: 'avner@radomsky.co.uk', lastSeen: null, invitedAt: null });
+            }
+            // de-dupe by email (keep the one with a lastSeen if any)
+            const byEmail = {};
+            arr.forEach((x) => {
+              const k = x.email.toLowerCase();
+              if (!byEmail[k]) byEmail[k] = x;
+              else if (x.lastSeen && !byEmail[k].lastSeen) byEmail[k] = x;
+            });
+            setAdminUsers(Object.values(byEmail));
+          });
+        }
       } else {
         setUser(null);
         setLoading(false);
@@ -1297,6 +1331,12 @@ export default function CharityDeliverySystem() {
       await signOut(secondaryAuth); // sign out the secondary session immediately
       // send the new admin a link to set their own password
       await sendPasswordResetEmail(auth, email);
+      // record in the shared admin-user list for display
+      try {
+        const exists = adminUsers.some((u) => u.email.toLowerCase() === email.toLowerCase());
+        const next = exists ? adminUsers : [...adminUsers, { email, lastSeen: null, invitedAt: new Date().toISOString() }];
+        await set(ref(db, 'adminUsers'), next);
+      } catch (e) { /* display list is best-effort */ }
       setUserMgmtMsg('✓ Invited ' + email + '. They have been emailed a link to set their password.');
       setNewUserEmail('');
     } catch (e) {
@@ -1315,6 +1355,18 @@ export default function CharityDeliverySystem() {
     } finally {
       if (secondaryApp) { try { await deleteApp(secondaryApp); } catch (e) {} }
       setUserMgmtBusy(false);
+    }
+  };
+
+  const removeAdminFromList = async (email) => {
+    if (email === 'avner@radomsky.co.uk') { setUserMgmtMsg('The main admin cannot be removed from the list.'); return; }
+    if (!window.confirm('Remove ' + email + ' from this list?\n\nNote: this only removes them from this display list. To fully revoke their login, also delete their account in the Firebase Console (Authentication → Users).')) return;
+    try {
+      const next = adminUsers.filter((u) => u.email !== email);
+      await set(ref(db, 'adminUsers'), next);
+      setUserMgmtMsg('Removed ' + email + ' from the list. Remember to also delete their account in the Firebase Console to fully revoke access.');
+    } catch (e) {
+      setUserMgmtMsg('Could not update the list: ' + e.message);
     }
   };
 
@@ -3131,7 +3183,36 @@ export default function CharityDeliverySystem() {
               </button>
             </div>
             {userMgmtMsg && <div style={{ marginTop: '10px', fontSize: '13px', color: userMgmtMsg.startsWith('✓') ? '#2e7d32' : '#c62828' }}>{userMgmtMsg}</div>}
-            <p style={{ fontSize: '12px', color: '#888', marginTop: '10px', marginBottom: 0 }}>To remove someone's access, delete their account in the Firebase console (Authentication → Users). Removing access from inside the app isn't available for safety reasons.</p>
+            <div style={{ marginTop: '14px' }}>
+              <strong style={{ fontSize: '13px' }}>Admin users ({adminUsers.length}):</strong>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', marginTop: '6px' }}>
+                <tbody>
+                  {adminUsers.map((u) => {
+                    const isMain = u.email === 'avner@radomsky.co.uk';
+                    const seen = u.lastSeen ? new Date(u.lastSeen).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : null;
+                    return (
+                      <tr key={u.email} style={{ borderBottom: '1px solid #d7e8d7' }}>
+                        <td style={{ padding: '6px 4px' }}>{u.email}{isMain ? <span style={{ color: '#888', fontSize: '11px' }}> (main)</span> : ''}</td>
+                        <td style={{ padding: '6px 4px' }}>
+                          {seen
+                            ? <span style={{ color: '#2e7d32', fontWeight: 'bold', fontSize: '12px' }}>✓ Active <span style={{ color: '#888', fontWeight: 'normal' }}>· last login {seen}</span></span>
+                            : <span style={{ color: '#e65100', fontWeight: 'bold', fontSize: '12px' }}>● Invited – not yet logged in</span>}
+                        </td>
+                        <td style={{ padding: '6px 4px', textAlign: 'right' }}>
+                          {!isMain && (
+                            <button onClick={() => removeAdminFromList(u.email)}
+                              style={{ padding: '4px 10px', backgroundColor: 'transparent', color: '#c62828', border: '1px solid #c62828', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
+                              Remove
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p style={{ fontSize: '12px', color: '#888', marginTop: '10px', marginBottom: 0 }}>This list shows admins invited through the app. To fully revoke access, delete the account in the Firebase console (Authentication → Users) as well — removing from this list alone doesn't disable their login.</p>
           </div>
 
           <h3>📊 Brought Forward Total</h3>
