@@ -45,6 +45,7 @@ export default function CharityDeliverySystem() {
   const [userMgmtMsg, setUserMgmtMsg] = useState('');
   const [userMgmtBusy, setUserMgmtBusy] = useState(false);
   const [adminUsers, setAdminUsers] = useState([{ email: 'avner@radomsky.co.uk', lastSeen: null, invitedAt: null }]);
+  const [adminUsersError, setAdminUsersError] = useState('');
 
   // UI Navigation
   const [activeTab, setActiveTab] = useState('summary');
@@ -144,10 +145,11 @@ export default function CharityDeliverySystem() {
               const nowISO = new Date().toISOString();
               if (meIdx >= 0) { arr[meIdx] = { ...arr[meIdx], lastSeen: nowISO }; }
               else { arr.push({ email: currentUser.email, lastSeen: nowISO, invitedAt: null }); }
-              set(ref(db, 'adminUsers'), arr).catch(() => {});
+              set(ref(db, 'adminUsers'), arr).catch((e) => { console.error('adminUsers write failed (check DB rules for /adminUsers):', e); });
             }).catch(() => {});
           }
           onValue(ref(db, 'adminUsers'), (snap) => {
+            setAdminUsersError('');
             const v = snap.val();
             let arr = [];
             if (v) arr = (Array.isArray(v) ? v : Object.values(v)).map((x) => (typeof x === 'string' ? { email: x, lastSeen: null, invitedAt: null } : x)).filter((x) => x && x.email);
@@ -163,6 +165,9 @@ export default function CharityDeliverySystem() {
               else if (x.lastSeen && !byEmail[k].lastSeen) byEmail[k] = x;
             });
             setAdminUsers(Object.values(byEmail));
+          }, (err) => {
+            console.error('adminUsers read failed (check DB rules for /adminUsers):', err);
+            setAdminUsersError('Could not read the shared admin list — your database rules likely don\'t allow access to the "adminUsers" path. See the note below.');
           });
         }
       } else {
@@ -3183,6 +3188,7 @@ export default function CharityDeliverySystem() {
               </button>
             </div>
             {userMgmtMsg && <div style={{ marginTop: '10px', fontSize: '13px', color: userMgmtMsg.startsWith('✓') ? '#2e7d32' : '#c62828' }}>{userMgmtMsg}</div>}
+            {adminUsersError && <div style={{ marginTop: '10px', fontSize: '13px', color: '#c62828', backgroundColor: '#fdecea', padding: '8px', borderRadius: '4px', border: '1px solid #f5c6cb' }}>⚠ {adminUsersError}</div>}
             <div style={{ marginTop: '14px' }}>
               <strong style={{ fontSize: '13px' }}>Admin users ({adminUsers.length}):</strong>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', marginTop: '6px' }}>
