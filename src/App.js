@@ -1577,28 +1577,15 @@ export default function CharityDeliverySystem() {
     const parts = ordered.map((key) => {
       const a = addresses[key] || {};
       const full = (a.fullAddress || key);
-      const flatMatch = full.match(/^\s*flat\s*\d+[a-z]?\b/i);
-      const stripped = full.replace(/^\s*flat\s*\d+,?\s*/i, '');
-      const numMatch = stripped.match(/^\s*(\d+[a-z]?)\b/i);
-      // A flat in a NAMED building (e.g. "Flat 18, Granger Court, Whitehall Close") →
-      // keep the flat + building name + postcode as text; the building name is what the
-      // driver needs and the postcode makes Google resolve it.
-      if (flatMatch && !numMatch && a.postcode) {
-        // use up to the building/street part + postcode (drop trailing town fluff lightly)
-        return encodeURIComponent((full.replace(/,\s*$/, '') + ' ' + a.postcode).trim());
-      }
-      // A normal numbered address (e.g. "204 Colleridge Way", or "Flat 2, 1 Beech Drive"
-      // where the building has a number) → "number + postcode": reliable door resolution,
-      // immune to duplicate/misspelled free-text (e.g. two "204 Colleridge Way" entries).
-      if (numMatch && a.postcode) {
-        return encodeURIComponent((numMatch[1] + ' ' + a.postcode).trim());
-      }
-      // No usable number and not a named-building flat (a pure house name like "Cairndrum")
-      // → use coordinates so it always geocodes and never gets stuck.
-      if (typeof a.lat === 'number' && typeof a.lng === 'number') {
+      // A pure house NAME with no number anywhere (e.g. "Cairndrum, Elstree Hill South")
+      // can fail to geocode in Google's directions, so for those we use coordinates which
+      // always resolve. Everything with a number uses the full address text + postcode,
+      // which reliably resolves the actual door (dropping the street name breaks it).
+      const hasAnyNumber = /\d/.test(full);
+      if (!hasAnyNumber && typeof a.lat === 'number' && typeof a.lng === 'number') {
         return a.lat + ',' + a.lng;
       }
-      const text = full + (a.postcode ? ' ' + a.postcode : '');
+      const text = full.replace(/,\s*$/, '') + (a.postcode ? ', ' + a.postcode : '');
       return encodeURIComponent(text.trim());
     });
     if (parts.length === 0) return '';
