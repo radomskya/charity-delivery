@@ -972,6 +972,10 @@ export default function CharityDeliverySystem() {
       votes: {}
     }).then(() => {
       setActivePollId(pollId);
+      // A brand-new poll starts with a clean slate — clear any ticks carried over from the
+      // previous poll so nobody shows as "available" until they actually vote in this poll.
+      setAvailableDrivers({});
+      setPollVotes({});
     }).catch((err) => {
       alert('Could not open poll: ' + err.message);
     });
@@ -1045,16 +1049,22 @@ export default function CharityDeliverySystem() {
   // ============================================================================
 
   // Listen to votes for the active poll
+  const lastPolledIdRef = useRef(null);
   useEffect(() => {
     if (!db || !activePollId) return;
     const votesRef = ref(db, `polls/${activePollId}/votes`);
     const unsub = onValue(votesRef, (snap) => {
       const v = snap.val() || {};
       setPollVotes(v);
+      // When we switch to a different poll, wipe availability first so ticks from the
+      // previous poll don't linger. Within the same poll, preserve existing state (so
+      // manual admin toggles and already-applied votes are kept).
+      const pollChanged = lastPolledIdRef.current !== activePollId;
+      lastPolledIdRef.current = activePollId;
       // Auto-apply votes to availability. Match each driver to their vote by phone-hash
       // (stable) then name, and only apply votes that have a real available value.
       setAvailableDrivers((prev) => {
-        const next = { ...prev };
+        const next = pollChanged ? {} : { ...prev };
         Object.keys(drivers).forEach((name) => {
           const phone = driverPhones[name];
           let vote = null;
