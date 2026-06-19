@@ -60,6 +60,10 @@ export default function CharityDeliverySystem() {
   useEffect(() => {
     try { window.localStorage.setItem('activeTab', activeTab); } catch (e) {}
   }, [activeTab]);
+  // Set the browser tab title.
+  useEffect(() => {
+    try { document.title = 'BKFG Deliveries'; } catch (e) {}
+  }, []);
   const [addressSearch, setAddressSearch] = useState('');
   const [availabilityEditMode, setAvailabilityEditMode] = useState(false);
   const [showAddAddress, setShowAddAddress] = useState(false);
@@ -2341,7 +2345,7 @@ export default function CharityDeliverySystem() {
   if (!user) {
     return (
       <div style={{ padding: '40px', maxWidth: '400px', margin: '0 auto' }}>
-        <h1>🍽️ Charity Delivery Coordinator</h1>
+        <h1>🍽️ BKFG Deliveries</h1>
         <p>Admin Access Only</p>
         {authError && <div style={{ color: 'red', marginBottom: '10px' }}>{authError}</div>}
         <form onSubmit={(e) => {
@@ -2379,7 +2383,7 @@ export default function CharityDeliverySystem() {
   return (
     <div style={{ fontFamily: 'Arial, sans-serif', padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h1>🍽️ Charity Delivery Coordinator</h1>
+        <h1>🍽️ BKFG Deliveries</h1>
         <button onClick={() => signOut(auth)}
           style={{ padding: '8px 16px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>
           Logout
