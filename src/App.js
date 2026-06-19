@@ -2817,6 +2817,19 @@ export default function CharityDeliverySystem() {
                 <strong>Type:</strong> {deliveryType.charAt(0).toUpperCase() + deliveryType.slice(1)}
               </div>
               <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '20px' }}>
+                <div style={{ flex: 1, minWidth: '120px', backgroundColor: '#e8f5e9', border: '2px solid #43a047', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '28px', fontWeight: 'bold' }}>{(() => {
+                    return Object.keys(addresses).filter((key) => {
+                      if (isOnHold(addresses[key], selectedDate)) return false;
+                      const dateOv = (weekOverrides && weekOverrides[selectedDate] && weekOverrides[selectedDate][key]) || {};
+                      if (dateOv.excluded) return false;
+                      const calc = calculatedAddresses[key];
+                      const total = calc ? (calc.chicken + calc.meat + calc.pies) : 0;
+                      return total > 0;
+                    }).length;
+                  })()}</div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>📍 Stops</div>
+                </div>
                 <div style={{ flex: 1, minWidth: '120px', backgroundColor: '#fff8e1', border: '2px solid #ffb300', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
                   <div style={{ fontSize: '28px', fontWeight: 'bold' }}>{weekTotals.chicken}</div>
                   <div style={{ fontSize: '13px', color: '#666' }}>🍗 Chicken</div>
