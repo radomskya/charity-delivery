@@ -639,6 +639,9 @@ export default function CharityDeliverySystem() {
       notes: a.notes || '',
       lat: a.lat != null ? a.lat : '',
       lng: a.lng != null ? a.lng : '',
+      originalPostcode: a.postcode || '',
+      originalLat: a.lat != null ? a.lat : '',
+      originalLng: a.lng != null ? a.lng : '',
       hold: a.hold || { type: 'none', from: '', to: '' },
       preferredDriver: a.preferredDriver || '',
       avoidDrivers: a.avoidDrivers || []
@@ -659,7 +662,14 @@ export default function CharityDeliverySystem() {
     let lng = editingAddress.lng;
     let needsLocation = false;
 
-    const hasManual = (lat !== '' && lat != null && !isNaN(parseFloat(lat)) && lng !== '' && lng != null && !isNaN(parseFloat(lng)));
+    // Did the user change the postcode but leave the lat/lng as they were? Then the old
+    // coordinates are stale — force a fresh geocode of the new postcode rather than keeping
+    // the previous location.
+    const postcodeChanged = (editingAddress.originalPostcode || '') !== (editingAddress.postcode || '');
+    const coordsUntouched = (String(lat) === String(editingAddress.originalLat) && String(lng) === String(editingAddress.originalLng));
+    const forceRegeocode = postcodeChanged && coordsUntouched;
+
+    const hasManual = !forceRegeocode && (lat !== '' && lat != null && !isNaN(parseFloat(lat)) && lng !== '' && lng != null && !isNaN(parseFloat(lng)));
 
     if (hasManual) {
       lat = parseFloat(lat);
@@ -1512,9 +1522,9 @@ export default function CharityDeliverySystem() {
   };
 
   const singleMapLink = (key) => {
-    const a = addresses[key] || {};
-    const q = (a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : '');
-    return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q.trim());
+    // Use the same resolution rules as the route (full address, strip "Flat N" to building
+    // name, coordinates only for pure house-names) so the pin lands in the same place.
+    return 'https://www.google.com/maps/search/?api=1&query=' + addressWaypoint(key);
   };
 
   const orderStops = (keys) => {
@@ -1593,6 +1603,24 @@ export default function CharityDeliverySystem() {
     return result.concat(noCoords);
   };
 
+  // Resolve a single address to the best Google-Maps query string, using the same rules
+  // for both the route and the per-address Map links:
+  //  - strip a leading "Flat N" so Google searches on the building name / street
+  //  - a pure house NAME with no number anywhere → use coordinates (text search is unreliable)
+  //  - otherwise → full address text + postcode (resolves the actual door)
+  // Returns an already-encoded segment (coords are sent raw, as Google expects).
+  const addressWaypoint = (key) => {
+    const a = addresses[key] || {};
+    const fullRaw = (a.fullAddress || key);
+    const full = fullRaw.replace(/^\s*flat\s*\d+[a-z]?\s*,?\s*/i, '');
+    const originalHasNumber = /\d/.test(fullRaw);
+    if (!originalHasNumber && typeof a.lat === 'number' && typeof a.lng === 'number') {
+      return a.lat + ',' + a.lng;
+    }
+    const text = full.replace(/,\s*$/, '') + (a.postcode ? ', ' + a.postcode : '');
+    return encodeURIComponent(text.trim());
+  };
+
   const buildRouteLink = (keys) => {
     const ordered = orderStops(keys);
     const seen = new Set();
@@ -1600,24 +1628,8 @@ export default function CharityDeliverySystem() {
     ordered.forEach((key) => {
       const a = addresses[key] || {};
       const fullRaw = (a.fullAddress || key);
-      // For the MAP ROUTE only, strip a leading "Flat N" so Google searches on the building
-      // name / street (which it resolves far more reliably than a flat number). The flat
-      // number is still shown to the driver in their delivery list. E.g.
-      //   "Flat 18, Granger Court, Whitehall Close" -> "Granger Court, Whitehall Close"
-      //   "Flat 2, 1 Beech Drive"                   -> "1 Beech Drive"
       const full = fullRaw.replace(/^\s*flat\s*\d+[a-z]?\s*,?\s*/i, '');
-      // A pure house NAME with no number anywhere in the ORIGINAL address (e.g.
-      // "Cairndrum, Elstree Hill South") can fail to geocode in Google's directions, so for
-      // those we use coordinates which always resolve. Stripped flats (e.g. "Granger Court")
-      // keep their building-name text — Google resolves a named building + postcode fine.
-      const originalHasNumber = /\d/.test(fullRaw);
-      let waypoint;
-      if (!originalHasNumber && typeof a.lat === 'number' && typeof a.lng === 'number') {
-        waypoint = a.lat + ',' + a.lng;
-      } else {
-        const text = full.replace(/,\s*$/, '') + (a.postcode ? ', ' + a.postcode : '');
-        waypoint = encodeURIComponent(text.trim());
-      }
+      const waypoint = addressWaypoint(key);
       // Collapse stops that are truly the SAME doorstep (e.g. two families at the same
       // building, like two "204 Colleridge Way" flats). The mobile Google Maps app breaks
       // when given two stops at the same point. We only merge when BOTH the house/flat
@@ -2637,6 +2649,7 @@ export default function CharityDeliverySystem() {
                   {a.avoidDrivers && a.avoidDrivers.length > 0 && <p style={{ margin: '3px 0', fontSize: '11px', color: '#c62828' }}>🚫 Avoid: {a.avoidDrivers.join(', ')}</p>}
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={() => startEditAddress(key)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#2196F3', color: 'white', border: 'none', cursor: 'pointer' }}>Edit</button>
+                    <a href={singleMapLink(key)} target="_blank" rel="noopener noreferrer" style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#0F9D58', color: 'white', border: 'none', cursor: 'pointer', textDecoration: 'none', display: 'inline-block' }}>📍 Map</a>
                     {a.needsLocation && <button onClick={() => locateAddress(key)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#FF9800', color: 'white', border: 'none', cursor: 'pointer' }}>Locate</button>}
                     <button onClick={() => deleteAddress(key)} style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer' }}>Delete</button>
                   </div>
