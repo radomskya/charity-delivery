@@ -1701,8 +1701,28 @@ export default function CharityDeliverySystem() {
       const scale = 2; // retina-quality
       const width = 620;
       const headerH = 96;
-      const totalsH = 70;
       const footerH = 20;
+
+      // Group stops by their exact order combination (e.g. "1 Chicken, 1 Meat") so the
+      // driver can pack parcels in batches. Build a sorted list of "combo -> stop count".
+      const comboCounts = {};
+      rawKeys.forEach((key) => {
+        const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+        if ((c.chicken + c.meat + c.pies) === 0) return;
+        const partsArr = [];
+        if (c.chicken) partsArr.push(c.chicken + ' Chicken');
+        if (c.meat) partsArr.push(c.meat + ' Meat');
+        if (c.pies) partsArr.push(c.pies + ' Pies');
+        const label = partsArr.join(', ');
+        comboCounts[label] = (comboCounts[label] || 0) + 1;
+      });
+      // Sort: most common combination first, then alphabetically for stable ties.
+      const comboList = Object.keys(comboCounts)
+        .map((label) => ({ label, count: comboCounts[label] }))
+        .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
+      const comboLineH = 19;
+      // totals box = header line + qty line + a "packing groups" heading + the combo lines
+      const totalsH = 70 + 24 + (comboList.length * comboLineH) + 10;
 
       // We need ctx early to measure text for wrapping, so create canvas first.
       const canvas = document.createElement('canvas');
@@ -1848,6 +1868,19 @@ export default function CharityDeliverySystem() {
       ctx.font = 'bold 17px Arial, sans-serif';
       ctx.fillStyle = '#111111';
       ctx.fillText('Chicken: ' + totC + '      Meat: ' + totM + (showPies ? '      Pies: ' + totP : ''), 20, y + 32);
+
+      // Packing groups: how many stops share each order combination, for easy batching.
+      let gy = y + 58;
+      ctx.fillStyle = '#1b5e20';
+      ctx.font = 'bold 13px Arial, sans-serif';
+      ctx.fillText('PACKING GROUPS', 20, gy);
+      gy += 18;
+      ctx.font = '14px Arial, sans-serif';
+      ctx.fillStyle = '#222222';
+      comboList.forEach((g) => {
+        ctx.fillText('• ' + g.label + '  =  ' + g.count + (g.count === 1 ? ' stop' : ' stops'), 24, gy);
+        gy += comboLineH;
+      });
 
       canvas.toBlob((blob) => {
         if (blob) resolve(blob); else reject(new Error('Could not create image'));
@@ -2750,6 +2783,27 @@ export default function CharityDeliverySystem() {
                         ? `🔴 Poll closed (deadline was ${formatCutoff(activePollId.split('-').slice(0,3).join('-'))}). Late changes via the Allocate tab.`
                         : `⏰ Closes ${formatCutoff(activePollId.split('-').slice(0,3).join('-'))}`}
                     </p>
+                    {(() => {
+                      const names = Object.keys(drivers);
+                      let yes = 0, no = 0, waiting = 0;
+                      names.forEach((name) => {
+                        const dv = getDriverVote(name);
+                        const v = dv ? dv.available : null;
+                        if (v === true) yes++;
+                        else if (v === false) no++;
+                        else waiting++;
+                      });
+                      const pill = (label, count, bg, border) => (
+                        <span style={{ backgroundColor: bg, border: `1px solid ${border}`, borderRadius: '14px', padding: '3px 12px', fontSize: '13px', fontWeight: 'bold' }}>{label} {count}</span>
+                      );
+                      return (
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '8px 0 4px' }}>
+                          {pill('✅ Yes', yes, '#e8f5e9', '#4CAF50')}
+                          {pill('❌ No', no, '#ffebee', '#e53935')}
+                          {pill('⏳ No vote', waiting, '#f5f5f5', '#bbb')}
+                        </div>
+                      );
+                    })()}
                     <input type="text" readOnly value={`${window.location.origin}/vote.html?poll=${activePollId}`}
                       style={{ width: '100%', padding: '8px', boxSizing: 'border-box', fontSize: '13px' }}
                       onFocus={(e) => e.target.select()} />
