@@ -65,6 +65,15 @@
       <span id="deadline-text"></span>
     </div>
 
+    <div id="tally-area" class="hidden" style="margin-bottom:14px;">
+      <div class="muted" style="margin-bottom:6px;">Responses so far:</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <span id="tally-yes" style="background:#e8f5e9;border:1px solid #4CAF50;border-radius:14px;padding:4px 14px;font-size:14px;font-weight:bold;">✅ Yes 0</span>
+        <span id="tally-no" style="background:#ffebee;border:1px solid #e53935;border-radius:14px;padding:4px 14px;font-size:14px;font-weight:bold;">❌ No 0</span>
+        <span id="tally-waiting" style="background:#f5f5f5;border:1px solid #bbb;border-radius:14px;padding:4px 14px;font-size:14px;font-weight:bold;">⏳ No vote 0</span>
+      </div>
+    </div>
+
     <div id="phone-step" class="hidden">
       <p>Please enter your mobile number to confirm who you are.</p>
       <input type="tel" id="phone-input" placeholder="e.g. 07700 123456" autocomplete="tel">
@@ -178,6 +187,25 @@
         }
         el('loading').classList.add('hidden');
         el('phone-step').classList.remove('hidden');
+
+        // Show a live tally of responses (numbers only, no names). Count yes/no from the
+        // votes node, and "no vote" as roster drivers who haven't voted yet.
+        var rosterCount = Object.keys(roster).length;
+        db.ref('polls/' + pollId + '/votes').on('value', function(vsnap) {
+          var votes = vsnap.val() || {};
+          var yes = 0, no = 0;
+          Object.keys(votes).forEach(function(h) {
+            var v = votes[h];
+            if (v && v.available === true) yes++;
+            else if (v && v.available === false) no++;
+          });
+          var waiting = rosterCount - (yes + no);
+          if (waiting < 0) waiting = 0;
+          el('tally-yes').textContent = '✅ Yes ' + yes;
+          el('tally-no').textContent = '❌ No ' + no;
+          el('tally-waiting').textContent = '⏳ No vote ' + waiting;
+          el('tally-area').classList.remove('hidden');
+        });
       }).catch(function(err) {
         showError('Could not load the poll: ' + err.message);
       });
