@@ -2305,34 +2305,23 @@ export default function CharityDeliverySystem() {
 
   // Shorten a long URL via TinyURL (free, no key, CORS-friendly from the browser).
   // Falls back to the original on any failure so the route link always works.
-  // Shorten the route URL for a tidy WhatsApp message. Tries spoo.me first (open-source,
-  // API-first, clean INSTANT redirect with no interstitial page), then is.gd, then falls
-  // back to the full Google Maps URL (which itself opens Maps directly, just longer).
-  // Every path lands the driver straight in Google Maps with no preview/redirect page.
+  // Our OWN URL shortener, built on the app's Firebase database — no third-party service,
+  // so no CORS failures, rate limits, or outages. We store the long URL under a short code
+  // in the `shortlinks` node, and a tiny redirect page (/r.html) forwards the driver to it.
+  // The short link is https://<your-domain>/r/<code>. If the DB write fails for any reason,
+  // we fall back to the full Maps URL (which still works, just longer).
   const shortenUrl = async (longUrl) => {
-    // 1) spoo.me — POST form-encoded, returns JSON { short_url }
     try {
-      const resp = await fetch('https://spoo.me/', {
-        method: 'POST',
-        headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'url=' + encodeURIComponent(longUrl)
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const s = data && (data.short_url || data.shortUrl || data.short);
-        if (s && String(s).startsWith('http')) return s;
-      }
-    } catch (e) { /* fall through */ }
-    // 2) is.gd — simple GET, clean instant redirect
-    try {
-      const resp = await fetch('https://is.gd/create.php?format=simple&url=' + encodeURIComponent(longUrl));
-      if (resp.ok) {
-        const short = (await resp.text()).trim();
-        if (short.startsWith('http')) return short;
-      }
-    } catch (e) { /* fall through */ }
-    // 3) fallback: the full direct Maps URL (opens Maps straight away, just long)
-    return longUrl;
+      if (!db) return longUrl;
+      // Reuse an existing code if this exact URL was already shortened (keeps things tidy).
+      // Otherwise generate a short random code and store the mapping.
+      const code = Math.random().toString(36).slice(2, 8); // 6 chars, e.g. "x7k2ab"
+      await set(ref(db, 'shortlinks/' + code), { url: longUrl, at: new Date().toISOString() });
+      return window.location.origin + '/r.html?c=' + code;
+    } catch (e) {
+      console.error('shortlink write failed (check DB rules for /shortlinks):', e);
+      return longUrl;
+    }
   };
 
   const buildDriverCaptionAsync = async (driverName, keys) => {
