@@ -3125,7 +3125,7 @@ export default function CharityDeliverySystem() {
                   {(() => {
                     let farCount = 0;
                     Object.keys(proposedAllocation).filter(d => d !== '__unassigned').forEach((driver) => {
-                      const ordered = orderStops(proposedAllocation[driver]);
+                      const ordered = orderStops((proposedAllocation[driver] || []).filter(k => calculatedAddresses[k]));
                       for (let i = 0; i < ordered.length - 1; i++) {
                         const d = milesBetween(ordered[i], ordered[i + 1]);
                         if (d !== null && d > 1.5) farCount++;
@@ -3141,7 +3141,7 @@ export default function CharityDeliverySystem() {
                   {(() => {
                     let prefMiss = 0;
                     Object.keys(proposedAllocation).filter(d => d !== '__unassigned').forEach((driver) => {
-                      (proposedAllocation[driver] || []).forEach((key) => {
+                      (proposedAllocation[driver] || []).filter(k => calculatedAddresses[k]).forEach((key) => {
                         const a = addresses[key];
                         if (a && a.preferredDriver && a.preferredDriver !== driver && availableDrivers[a.preferredDriver]) prefMiss++;
                       });
@@ -3156,11 +3156,16 @@ export default function CharityDeliverySystem() {
                   <p style={{ fontSize: '13px', color: '#666' }}>
                     {allocationApproved ? 'This plan is approved and locked. Unlock to make changes.' : 'Move any address to a different driver, then approve.'}
                   </p>
-                  {Object.keys(proposedAllocation).filter(d => d !== '__unassigned').map((driver) => (
+                  {Object.keys(proposedAllocation).filter(d => d !== '__unassigned').map((driver) => {
+                    // Only show stops that are still active this week — an address put on hold,
+                    // excluded, or with nothing to deliver drops out of calculatedAddresses, so
+                    // it should disappear from the allocation too (not linger showing 0 of each).
+                    const activeList = (proposedAllocation[driver] || []).filter((key) => calculatedAddresses[key]);
+                    return (
                     <div key={driver} style={{ border: '1px solid #ddd', borderRadius: '4px', padding: '12px', marginBottom: '12px' }}>
-                      <strong>{driver}</strong> <span style={{ color: '#666', fontSize: '13px' }}>({proposedAllocation[driver].length} stops)</span>
-                      {proposedAllocation[driver].length === 0 && <p style={{ fontSize: '12px', color: '#999', margin: '6px 0 0 0' }}>No stops</p>}
-                      {(() => { const ordered = orderStops(proposedAllocation[driver]); return ordered.map((key, idx) => {
+                      <strong>{driver}</strong> <span style={{ color: '#666', fontSize: '13px' }}>({activeList.length} stops)</span>
+                      {activeList.length === 0 && <p style={{ fontSize: '12px', color: '#999', margin: '6px 0 0 0' }}>No stops</p>}
+                      {(() => { const ordered = orderStops(activeList); return ordered.map((key, idx) => {
                         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
                         const nextKey = ordered[idx + 1];
                         const distNext = nextKey ? milesBetween(key, nextKey) : null;
@@ -3202,7 +3207,8 @@ export default function CharityDeliverySystem() {
                         );
                       }); })()}
                     </div>
-                  ))}
+                    );
+                  })}
                   {proposedAllocation.__unassigned && proposedAllocation.__unassigned.length > 0 && (
                     <div style={{ border: '1px solid #f44336', borderRadius: '4px', padding: '12px', marginBottom: '12px', backgroundColor: '#ffebee' }}>
                       <strong style={{ color: '#c62828' }}>⚠ Unassigned ({proposedAllocation.__unassigned.length})</strong>
@@ -3227,9 +3233,9 @@ export default function CharityDeliverySystem() {
                     </div>
                   )}
 
-                  {Object.keys(proposedAllocation).filter(d => d !== '__unassigned' && (proposedAllocation[d] || []).length > 0).length > 0 && (() => {
-                    const rows = Object.keys(proposedAllocation).filter(d => d !== '__unassigned' && (proposedAllocation[d] || []).length > 0).map((d) => {
-                      const ordered = orderStops(proposedAllocation[d]);
+                  {Object.keys(proposedAllocation).filter(d => d !== '__unassigned' && (proposedAllocation[d] || []).filter(k => calculatedAddresses[k]).length > 0).length > 0 && (() => {
+                    const rows = Object.keys(proposedAllocation).filter(d => d !== '__unassigned' && (proposedAllocation[d] || []).filter(k => calculatedAddresses[k]).length > 0).map((d) => {
+                      const ordered = orderStops((proposedAllocation[d] || []).filter(k => calculatedAddresses[k]));
                       let total = 0;
                       for (let i = 0; i < ordered.length - 1; i++) {
                         const m = milesBetween(ordered[i], ordered[i + 1]);
@@ -3310,8 +3316,10 @@ export default function CharityDeliverySystem() {
                   <button onClick={downloadAllImage} style={{ padding: '10px 18px', backgroundColor: '#607d8b', color: 'white', border: 'none', cursor: 'pointer' }}>⬇ Image</button>
                 </div>
               </div>
-              {Object.keys(allocations).filter(d => d !== '__unassigned' && allocations[d] && allocations[d].length > 0).map((driver) => {
-                const keys = allocations[driver];
+              {Object.keys(allocations).filter(d => d !== '__unassigned' && allocations[d] && allocations[d].filter(k => calculatedAddresses[k]).length > 0).map((driver) => {
+                // Only active stops this week — drop any address now on hold / excluded / with
+                // nothing to deliver, so it never reaches the driver's list, image, or route.
+                const keys = allocations[driver].filter(k => calculatedAddresses[k]);
                 return (
                   <div key={driver} style={{ border: '1px solid #ddd', borderRadius: '6px', padding: '14px', marginBottom: '16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
