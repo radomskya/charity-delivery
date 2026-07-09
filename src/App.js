@@ -2120,6 +2120,7 @@ export default function CharityDeliverySystem() {
     doc.text('ALL DELIVERIES', margin, 9);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
     doc.text('Week of ' + formatUKDate(selectedDate) + '  •  ' + driverNames.length + ' drivers', margin, 15);
+    doc.setFontSize(7); doc.text('v2', pageW - margin, 15, { align: 'right' }); doc.setFontSize(10);
 
     // Grand totals + per-driver figures
     let gStops = 0, gC = 0, gM = 0, gP = 0;
