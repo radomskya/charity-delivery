@@ -2107,7 +2107,12 @@ export default function CharityDeliverySystem() {
       return p > 0;
     })();
 
-    const driverNames = Object.keys(allocations).filter((d) => d !== '__unassigned' && allocations[d] && allocations[d].length > 0);
+    // Only include stops that are still active this week — an address on hold / excluded /
+    // with nothing to deliver drops out of calculatedAddresses, so it must not appear in the
+    // PDF (not even showing 0). activeKeysFor(d) gives a driver's live stops.
+    const activeKeysFor = (d) => (allocations[d] || []).filter((k) => calculatedAddresses[k]);
+
+    const driverNames = Object.keys(allocations).filter((d) => d !== '__unassigned' && activeKeysFor(d).length > 0);
 
     // Header band
     doc.setFillColor(27, 94, 32); doc.rect(0, 0, pageW, 20, 'F');
@@ -2121,7 +2126,7 @@ export default function CharityDeliverySystem() {
     const perDriver = {};
     driverNames.forEach((d) => {
       let s = 0, c = 0, m = 0, p = 0;
-      (allocations[d] || []).forEach((k) => { const q = calculatedAddresses[k] || {}; s += 1; c += q.chicken || 0; m += q.meat || 0; p += q.pies || 0; });
+      activeKeysFor(d).forEach((k) => { const q = calculatedAddresses[k] || {}; s += 1; c += q.chicken || 0; m += q.meat || 0; p += q.pies || 0; });
       perDriver[d] = { stops: s, chicken: c, meat: m, pies: p };
       gStops += s; gC += c; gM += m; gP += p;
     });
@@ -2167,13 +2172,32 @@ export default function CharityDeliverySystem() {
     const lineH = 4.6;
 
     driverNames.forEach((d) => {
-      const keys = orderStops(allocations[d]);
+      const keys = orderStops(activeKeysFor(d));
       let dC = 0, dM = 0, dP = 0;
       keys.forEach((k) => { const q = calculatedAddresses[k] || {}; dC += q.chicken || 0; dM += q.meat || 0; dP += q.pies || 0; });
 
+      // Packing groups: how many stops share each order combination, for easy batching when
+      // handing over parcels — same as the individual driver images.
+      const comboCounts = {};
+      keys.forEach((key) => {
+        const q = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+        if ((q.chicken + q.meat + q.pies) === 0) return;
+        const partsArr = [];
+        if (q.chicken) partsArr.push(q.chicken + ' Chicken');
+        if (q.meat) partsArr.push(q.meat + ' Meat');
+        if (q.pies) partsArr.push(q.pies + ' Pies');
+        const label = partsArr.join(', ');
+        comboCounts[label] = (comboCounts[label] || 0) + 1;
+      });
+      const comboList = Object.keys(comboCounts)
+        .map((label) => ({ label, count: comboCounts[label] }))
+        .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
+      const comboLineH = 4.2;
+      const groupsBlockH = comboList.length > 0 ? (5 + comboList.length * comboLineH + 2) : 0;
+
       // Measure the FULL block height (header + every stop with its wrapped address/note +
-      // totals) so the whole driver stays together in one column — the totals never get
-      // separated onto the next column.
+      // totals + packing groups) so the whole driver stays together in one column — the
+      // totals and groups never get separated onto the next column.
       let blockHeight = 5 + 5 + 5 + 3; // space + red line + name gap + header underline gap
       keys.forEach((key) => {
         const a = addresses[key] || {};
@@ -2184,6 +2208,7 @@ export default function CharityDeliverySystem() {
         blockHeight += aLines.length * lineH + lineH + nLines * (lineH - 0.4) + 3;
       });
       blockHeight += 11; // totals box
+      blockHeight += groupsBlockH; // packing groups
 
       // Choose the column ONCE for the whole block.
       const usable = pageH - margin;
@@ -2243,6 +2268,19 @@ export default function CharityDeliverySystem() {
       doc.setTextColor(17); doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
       doc.text('Chicken: ' + dC + '   Meat: ' + dM + (showPiesGlobal ? '   Pies: ' + dP : '') + '   (Stops: ' + keys.length + ')', tx + 2, y[col] + 4.6);
       y[col] += 11;
+
+      // packing groups — grouped order combinations for easy parcel batching
+      if (comboList.length > 0) {
+        const gx = colX[col];
+        doc.setTextColor(27, 94, 32); doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+        doc.text('PACKING GROUPS', gx, y[col]); y[col] += 4;
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(34);
+        comboList.forEach((g) => {
+          doc.text('• ' + g.label + '  =  ' + g.count + (g.count === 1 ? ' stop' : ' stops'), gx + 1, y[col]);
+          y[col] += comboLineH;
+        });
+        y[col] += 2;
+      }
     });
 
     return doc;
