@@ -2991,11 +2991,13 @@ export default function CharityDeliverySystem() {
                         </div>
                       )}
                       {addresses[key].notes && <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: '#c62828' }}>📝 {addresses[key].notes}</p>}
-                      <div style={{ marginTop: '8px' }}>
-                        <button onClick={() => toggleExcludeAddress(key)} style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: excluded ? '#4CAF50' : '#ff9800', color: 'white', border: 'none', cursor: 'pointer' }}>
-                          {excluded ? 'Include this week' : 'Exclude this week'}
-                        </button>
-                      </div>
+                      {!heldNow && (
+                        <div style={{ marginTop: '8px' }}>
+                          <button onClick={() => toggleExcludeAddress(key)} style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: excluded ? '#4CAF50' : '#ff9800', color: 'white', border: 'none', cursor: 'pointer' }}>
+                            {excluded ? 'Include this week' : 'Exclude this week'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
