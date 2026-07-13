@@ -64,6 +64,33 @@ export default function CharityDeliverySystem() {
   useEffect(() => {
     try { document.title = 'BKFG Deliveries'; } catch (e) {}
   }, []);
+
+  // Automatically clear range holds whose end date has passed, so an address doesn't stay
+  // looking "on hold" (with stale dates) once the hold period is over. It already becomes
+  // deliverable again on the right date — this just tidies the record itself.
+  useEffect(() => {
+    if (!addresses || Object.keys(addresses).length === 0) return;
+    const today = new Date().toISOString().split('T')[0];
+    let changed = false;
+    const updated = {};
+    Object.keys(addresses).forEach((key) => {
+      const a = addresses[key];
+      const h = a && a.hold;
+      if (h && h.type === 'range' && h.to && h.to < today) {
+        updated[key] = { ...a, hold: { type: 'none', from: '', to: '' } };
+        changed = true;
+      } else {
+        updated[key] = a;
+      }
+    });
+    if (changed) {
+      setAddresses(updated);
+      if (user && db) {
+        set(ref(db, `users/${user.uid}/addresses`), JSON.parse(JSON.stringify(updated)))
+          .catch((e) => console.error('expired hold cleanup save', e));
+      }
+    }
+  }, [addresses, user]);
   const [addressSearch, setAddressSearch] = useState('');
   const [availabilityEditMode, setAvailabilityEditMode] = useState(false);
   const [showAddAddress, setShowAddAddress] = useState(false);
@@ -2942,15 +2969,22 @@ export default function CharityDeliverySystem() {
               <h3>Addresses</h3>
               <p style={{ fontSize: '13px', color: '#666' }}>You can override quantities or exclude an address for this week only. Overrides apply to this date and feed both the butcher order and driver lists. They don't change the standing pattern.</p>
               <div style={{ marginBottom: '20px' }}>
-                {Object.keys(addresses).filter(key => !isOnHold(addresses[key], selectedDate)).map((key) => {
+                {Object.keys(addresses).map((key) => {
                   const dateOv = (weekOverrides && weekOverrides[selectedDate] && weekOverrides[selectedDate][key]) || {};
                   const calc = calculatedAddresses[key];
                   const excluded = !!dateOv.excluded;
+                  // Held addresses are still SHOWN here (greyed out and clearly badged) so you
+                  // can see at a glance that they're paused, rather than them silently vanishing.
+                  const heldNow = isOnHold(addresses[key], selectedDate);
                   const total = calc ? (calc.chicken + calc.meat + calc.pies) : 0;
-                  const zeroThisWeek = !excluded && total === 0;
+                  const zeroThisWeek = !excluded && !heldNow && total === 0;
+                  const holdInfo = addresses[key].hold || {};
                   return (
-                    <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: excluded ? '#fafafa' : (zeroThisWeek ? '#e8e8e8' : (calc && calc.overridden ? '#fffde7' : 'white')) }}>
-                      <strong style={{ textDecoration: excluded ? 'line-through' : 'none' }}>{addresses[key].fullAddress}{addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong>
+                    <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: heldNow ? '#eceff1' : (excluded ? '#fafafa' : (zeroThisWeek ? '#e8e8e8' : (calc && calc.overridden ? '#fffde7' : 'white'))) }}>
+                      <strong style={{ textDecoration: (excluded || heldNow) ? 'line-through' : 'none', color: heldNow ? '#666' : 'inherit' }}>{addresses[key].fullAddress}{addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong>
+                      {heldNow && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#fff', fontWeight: 'bold', backgroundColor: '#607d8b', padding: '2px 8px', borderRadius: '4px' }}>
+                        ⏸ ON HOLD{holdInfo.type === 'permanent' ? ' (permanent)' : (holdInfo.to ? ' until ' + formatUKDate(holdInfo.to) : '')}
+                      </span>}
                       {(() => {
                         const a = addresses[key];
                         const has = (w) => a[w] && (a[w].chicken || a[w].meat || a[w].pies);
@@ -2969,7 +3003,7 @@ export default function CharityDeliverySystem() {
                       {calc && calc.overridden && !excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#f57f17', fontWeight: 'bold' }}>✎ overridden this week</span>}
                       {excluded && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#999', fontWeight: 'bold' }}>excluded this week</span>}
                       {zeroThisWeek && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#555', fontWeight: 'bold' }}>no items this week (you can add a one-off below)</span>}
-                      {!excluded && (
+                      {!excluded && !heldNow && (
                         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px', flexWrap: 'wrap' }}>
                           <label style={{ fontSize: '12px' }}>🍗 <input type="number" style={{ width: '55px', padding: '4px' }}
                             value={dateOv.chicken != null ? dateOv.chicken : (calc ? calc.chicken : 0)}
