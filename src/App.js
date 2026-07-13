@@ -64,33 +64,6 @@ export default function CharityDeliverySystem() {
   useEffect(() => {
     try { document.title = 'BKFG Deliveries'; } catch (e) {}
   }, []);
-
-  // Automatically clear range holds whose end date has passed, so an address doesn't stay
-  // looking "on hold" (with stale dates) once the hold period is over. It already becomes
-  // deliverable again on the right date — this just tidies the record itself.
-  useEffect(() => {
-    if (!addresses || Object.keys(addresses).length === 0) return;
-    const today = new Date().toISOString().split('T')[0];
-    let changed = false;
-    const updated = {};
-    Object.keys(addresses).forEach((key) => {
-      const a = addresses[key];
-      const h = a && a.hold;
-      if (h && h.type === 'range' && h.to && h.to < today) {
-        updated[key] = { ...a, hold: { type: 'none', from: '', to: '' } };
-        changed = true;
-      } else {
-        updated[key] = a;
-      }
-    });
-    if (changed) {
-      setAddresses(updated);
-      if (user && db) {
-        set(ref(db, `users/${user.uid}/addresses`), JSON.parse(JSON.stringify(updated)))
-          .catch((e) => console.error('expired hold cleanup save', e));
-      }
-    }
-  }, [addresses, user]);
   const [addressSearch, setAddressSearch] = useState('');
   const [availabilityEditMode, setAvailabilityEditMode] = useState(false);
   const [showAddAddress, setShowAddAddress] = useState(false);
