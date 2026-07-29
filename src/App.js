@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
-import { getDatabase, ref, set, onValue, get } from 'firebase/database';
+import { getDatabase, ref, set, update, onValue, get } from 'firebase/database';
 
 // ============================================================================
 // FIREBASE CONFIGURATION
@@ -36,6 +36,7 @@ export default function CharityDeliverySystem() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const hasLoadedOnce = useRef(false);
+  const loadedHadAddressesRef = useRef(false);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -212,6 +213,7 @@ export default function CharityDeliverySystem() {
       const data = snapshot.val();
       if (data) {
         setAddresses(data.addresses || {});
+        if (data.addresses && Object.keys(data.addresses).length > 0) loadedHadAddressesRef.current = true;
         setDrivers(data.drivers || {});
         setDriverPhones(data.driverPhones || {});
         setDriverPreferences(data.driverPreferences || {});
@@ -294,7 +296,20 @@ export default function CharityDeliverySystem() {
     } catch (e) {
       clean = payload;
     }
-    set(ref(db, `users/${user.uid}`), clean).catch((err) => {
+    // Safety guard: never save until the first load has populated state. Without this, an
+    // early debounced save could write default/empty state over real data.
+    if (!hasLoadedOnce.current) return;
+    // Extra safety: if addresses somehow became empty but we know we loaded real data,
+    // skip the save rather than risk wiping everything. (A genuine "delete all" would go
+    // through a dedicated path, not the debounced autosave.)
+    if (loadedHadAddressesRef.current && Object.keys(addresses).length === 0) {
+      console.warn('Skipped autosave: addresses empty but data was loaded — preventing a wipe.');
+      return;
+    }
+    // Use update() (merge) rather than set() (replace) so a save can only ever change the
+    // fields in this payload — it can never wipe other data (e.g. holds, one-off addresses)
+    // if one field's state were momentarily stale. This prevents whole-record clobbering.
+    update(ref(db, `users/${user.uid}`), clean).catch((err) => {
       console.error('Save failed:', err);
     });
   };
