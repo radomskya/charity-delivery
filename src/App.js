@@ -1570,7 +1570,7 @@ export default function CharityDeliverySystem() {
   // driver image, and the Google Maps route link so they all match.
   // Approximate straight-line distance in miles between two addresses (for spotting outliers).
   const milesBetween = (k1, k2) => {
-    const a = addresses[k1], b = addresses[k2];
+    const a = effectiveAddress(k1), b = effectiveAddress(k2);
     if (!a || !b || typeof a.lat !== 'number' || typeof b.lat !== 'number') return null;
     const R = 3958.8; // earth radius in miles
     const toRad = (x) => x * Math.PI / 180;
@@ -3032,7 +3032,6 @@ export default function CharityDeliverySystem() {
               <div style={{ marginBottom: '20px' }}>
                 {Object.keys(addresses).map((key) => {
                   const dateOv = (weekOverrides && weekOverrides[selectedDate] && weekOverrides[selectedDate][key]) || {};
-                  const _dbgOv = JSON.stringify(dateOv);
                   const calc = calculatedAddresses[key];
                   const excluded = !!dateOv.excluded;
                   // Held addresses are still SHOWN here (greyed out and clearly badged) so you
@@ -3047,7 +3046,6 @@ export default function CharityDeliverySystem() {
                       {heldNow && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#fff', fontWeight: 'bold', backgroundColor: '#607d8b', padding: '2px 8px', borderRadius: '4px' }}>
                         ⏸ ON HOLD{holdInfo.type === 'permanent' ? ' (permanent)' : (holdInfo.to ? ' until ' + formatUKDate(holdInfo.to) : '')}
                       </span>}
-                      <div style={{ fontSize: '10px', color: '#b71c1c', fontFamily: 'monospace', wordBreak: 'break-all' }}>DBG {selectedDate}: {_dbgOv}</div>
                       {(() => {
                         const a = addresses[key];
                         const has = (w) => a[w] && (a[w].chicken || a[w].meat || a[w].pies);
@@ -3352,13 +3350,15 @@ export default function CharityDeliverySystem() {
                       {activeList.length === 0 && <p style={{ fontSize: '12px', color: '#999', margin: '6px 0 0 0' }}>No stops</p>}
                       {(() => { const ordered = orderStops(activeList); return ordered.map((key, idx) => {
                         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+                        const ea = effectiveAddress(key);
+                        const isAlt = !!(weekOverrides && weekOverrides[selectedDate] && weekOverrides[selectedDate][key] && weekOverrides[selectedDate][key].altAddress);
                         const nextKey = ordered[idx + 1];
                         const distNext = nextKey ? milesBetween(key, nextKey) : null;
                         const farJump = distNext !== null && distNext > 1.5;
                         return (
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', borderTop: '1px solid #f0f0f0', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong> <a href={singleMapLink(key)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', textDecoration: 'none' }}>🗺️</a></div>
+                              <div><strong>{ea.fullAddress || key}{ea.postcode ? ' ' + ea.postcode : ''}</strong> <a href={singleMapLink(key)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', textDecoration: 'none' }}>🗺️</a>{isAlt && <span style={{ marginLeft: '6px', fontSize: '11px', color: '#fff', backgroundColor: '#1565c0', padding: '1px 6px', borderRadius: '4px', fontWeight: 'bold' }}>this week only</span>}</div>
                               {addresses[key] && addresses[key].preferredDriver === driver && <div style={{ fontSize: '12px', color: '#2e7d32', fontWeight: 'bold', marginTop: '2px' }}>⭐ Preferred address</div>}
                               {addresses[key] && addresses[key].preferredDriver && addresses[key].preferredDriver !== driver && availableDrivers[addresses[key].preferredDriver] && <div style={{ display: 'inline-block', marginTop: '4px', backgroundColor: '#f3e5f5', border: '1.5px solid #6a1b9a', borderRadius: '4px', padding: '3px 8px', fontSize: '13px', color: '#6a1b9a', fontWeight: 'bold' }}>↪ Preferred driver: {addresses[key].preferredDriver} (available) — placed here instead</div>}
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
@@ -3399,10 +3399,11 @@ export default function CharityDeliverySystem() {
                       <strong style={{ color: '#c62828' }}>⚠ Unassigned ({proposedAllocation.__unassigned.length})</strong>
                       {proposedAllocation.__unassigned.map((key) => {
                         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
+                        const ea = effectiveAddress(key);
                         return (
                           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0', fontSize: '13px', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                              <div><strong>{addresses[key] ? addresses[key].fullAddress : key}{addresses[key] && addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong></div>
+                              <div><strong>{ea.fullAddress || key}{ea.postcode ? ' ' + ea.postcode : ''}</strong></div>
                               <div style={{ color: '#444', marginTop: '2px' }}>{c.chicken}🍗 {c.meat}🍖 {c.pies}🥧</div>
                               {addresses[key] && addresses[key].notes && <div style={{ color: '#c62828', fontSize: '12px', marginTop: '2px' }}>📝 {addresses[key].notes}</div>}
                             </div>
