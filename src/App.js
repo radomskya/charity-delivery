@@ -524,8 +524,13 @@ export default function CharityDeliverySystem() {
       calculated[key] = {
         ...quantities,
         notes: address.notes || '',
-        fullAddress: address.fullAddress,
-        postcode: address.postcode,
+        fullAddress: (ov && ov.altAddress) ? ov.altAddress : address.fullAddress,
+        postcode: (ov && ov.altAddress) ? (ov.altPostcode || '') : address.postcode,
+        // effective coordinates for THIS week: temp coords if a one-off address is set and
+        // was geocoded, otherwise the permanent coords.
+        lat: (ov && ov.altAddress && typeof ov.altLat === 'number') ? ov.altLat : address.lat,
+        lng: (ov && ov.altAddress && typeof ov.altLng === 'number') ? ov.altLng : address.lng,
+        altAddressActive: !!(ov && ov.altAddress),
         overridden: !!ov && !ov.excluded && (ov.chicken != null || ov.meat != null || ov.pies != null)
       };
       totalChicken += quantities.chicken;
@@ -1061,6 +1066,50 @@ export default function CharityDeliverySystem() {
     setWeekOverrides(prev => {
       const forDate = { ...(prev[selectedDate] || {}) };
       delete forDate[key];
+      return { ...prev, [selectedDate]: forDate };
+    });
+  };
+
+  // One-off "deliver elsewhere this week only" address override. Geocodes the temp postcode
+  // so the stop routes/orders correctly, then stores it in weekOverrides for the selected
+  // date. Flows through to the driver list, image, PDF, route and map link via
+  // effectiveAddress(); reverts automatically next week.
+  const [altAddressEditor, setAltAddressEditor] = useState(null); // { key, address, postcode }
+  const [altAddressBusy, setAltAddressBusy] = useState(false);
+
+  const saveAltAddress = async () => {
+    if (!altAddressEditor) return;
+    const { key, address, postcode } = altAddressEditor;
+    if (!address || !address.trim()) { alert('Please enter the temporary delivery address.'); return; }
+    setAltAddressBusy(true);
+    let coords = null;
+    if (postcode && postcode.trim()) {
+      coords = await geocodePostcode(postcode);
+    }
+    setWeekOverrides(prev => {
+      const forDate = { ...(prev[selectedDate] || {}) };
+      const existing = { ...(forDate[key] || {}) };
+      existing.altAddress = address.trim();
+      existing.altPostcode = (postcode || '').trim();
+      if (coords) { existing.altLat = coords.lat; existing.altLng = coords.lng; }
+      else { delete existing.altLat; delete existing.altLng; }
+      forDate[key] = existing;
+      return { ...prev, [selectedDate]: forDate };
+    });
+    setAltAddressBusy(false);
+    setAltAddressEditor(null);
+    if (postcode && postcode.trim() && !coords) {
+      alert('Saved the temporary address, but its postcode could not be located, so its position in the driving route may be approximate. The address will still show correctly on the driver list.');
+    }
+  };
+
+  const clearAltAddress = (key) => {
+    setWeekOverrides(prev => {
+      const forDate = { ...(prev[selectedDate] || {}) };
+      const existing = { ...(forDate[key] || {}) };
+      delete existing.altAddress; delete existing.altPostcode;
+      delete existing.altLat; delete existing.altLng;
+      forDate[key] = existing;
       return { ...prev, [selectedDate]: forDate };
     });
   };
@@ -1609,8 +1658,27 @@ export default function CharityDeliverySystem() {
   //  - a pure house NAME with no number anywhere → use coordinates (text search is unreliable)
   //  - otherwise → full address text + postcode (resolves the actual door)
   // Returns an already-encoded segment (coords are sent raw, as Google expects).
+  // Returns the address to USE for this week's outputs. If a one-off address override is set
+  // for the selected date, that temporary address/postcode/coords are returned; otherwise the
+  // permanent address. This is what makes "deliver elsewhere this week only" flow through to
+  // the driver list, image, PDF, route and map link — without changing the saved record.
+  const effectiveAddress = (key) => {
+    const base = addresses[key] || {};
+    const ov = (weekOverrides && weekOverrides[selectedDate] && weekOverrides[selectedDate][key]) || {};
+    if (ov.altAddress) {
+      return {
+        ...base,
+        fullAddress: ov.altAddress,
+        postcode: ov.altPostcode || '',
+        lat: typeof ov.altLat === 'number' ? ov.altLat : base.lat,
+        lng: typeof ov.altLng === 'number' ? ov.altLng : base.lng
+      };
+    }
+    return base;
+  };
+
   const addressWaypoint = (key) => {
-    const a = addresses[key] || {};
+    const a = effectiveAddress(key);
     const fullRaw = (a.fullAddress || key);
     const full = fullRaw.replace(/^\s*flat\s*\d+[a-z]?\s*,?\s*/i, '');
     const originalHasNumber = /\d/.test(fullRaw);
@@ -1663,7 +1731,7 @@ export default function CharityDeliverySystem() {
   const buildDriverXHTML = (driverName, keys) => {
     const width = 600;
     const rowsHTML = keys.map((key) => {
-      const a = addresses[key] || {};
+      const a = effectiveAddress(key);
       const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
       const notes = a.notes ? `<div style="font-size:11px;color:#c62828;margin-top:2px;">${escapeXML(a.notes)}</div>` : '';
       return `<tr style="border-bottom:1px solid #dddddd;">
@@ -1753,7 +1821,7 @@ export default function CharityDeliverySystem() {
       const addrFont = 'bold 19px Arial, sans-serif';
       const addrLineH = 24;
       const rowInfo = keys.map((key) => {
-        const a = addresses[key] || {};
+        const a = effectiveAddress(key);
         // wrap the address (incl postcode) onto as many lines as needed
         ctx.font = addrFont;
         const addrText = (a.fullAddress || key) + (a.postcode ? '  ' + a.postcode : '');
@@ -1815,7 +1883,7 @@ export default function CharityDeliverySystem() {
       let y = headerH + 10;
       rowInfo.forEach((info, idx) => {
         const key = info.key;
-        const a = addresses[key] || {};
+        const a = effectiveAddress(key);
         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
         const rH = info.h;
 
@@ -2030,7 +2098,7 @@ export default function CharityDeliverySystem() {
         y += driverHeaderH;
 
         keys.forEach((key, idx) => {
-          const a = addresses[key] || {};
+          const a = effectiveAddress(key);
           const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
           if (idx % 2 === 1) { ctx.fillStyle = '#e3edf7'; ctx.fillRect(ox - 4, y - 6, colW + 8, rowH); }
           ctx.fillStyle = '#111111';
@@ -2201,7 +2269,7 @@ export default function CharityDeliverySystem() {
       // totals and groups never get separated onto the next column.
       let blockHeight = 5 + 5 + 5 + 3; // space + red line + name gap + header underline gap
       keys.forEach((key) => {
-        const a = addresses[key] || {};
+        const a = effectiveAddress(key);
         doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
         const aLines = doc.splitTextToSize((a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : ''), colW);
         let nLines = 0;
@@ -2241,7 +2309,7 @@ export default function CharityDeliverySystem() {
       doc.setDrawColor(60); doc.setLineWidth(0.3); doc.line(x, y[col], x + colW, y[col]); y[col] += 3;
 
       keys.forEach((key) => {
-        const a = addresses[key] || {};
+        const a = effectiveAddress(key);
         const q = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
         const addr = (a.fullAddress || key) + (a.postcode ? ' ' + a.postcode : '');
         // (column already chosen for the whole block, so this stop stays put)
@@ -2526,6 +2594,10 @@ export default function CharityDeliverySystem() {
           {showAddAddress && (
             <div style={{ border: '1px solid #ddd', padding: '15px', marginBottom: '15px' }}>
               <h4>{editingAddress?.originalKey ? 'Edit Address' : 'Add Address'}</h4>
+              <input type="text" placeholder="Name (recipient)"
+                value={editingAddress?.name || ''}
+                onChange={(e) => setEditingAddress({ ...editingAddress, name: e.target.value })}
+                style={{ width: '100%', padding: '8px', marginBottom: '10px', boxSizing: 'border-box' }} />
               <input type="text" placeholder="Full Address"
                 value={editingAddress?.fullAddress || ''}
                 onChange={(e) => setEditingAddress({ ...editingAddress, fullAddress: e.target.value })}
@@ -2673,7 +2745,7 @@ export default function CharityDeliverySystem() {
 
           <div style={{ marginTop: '15px' }}>
             <input type="text" value={addressSearch} onChange={(e) => setAddressSearch(e.target.value)}
-              placeholder="🔍 Search addresses by name or postcode..."
+              placeholder="🔍 Search by name, address or postcode..."
               style={{ width: '100%', padding: '10px', marginBottom: '12px', boxSizing: 'border-box', fontSize: '14px' }} />
             {(() => {
               const term = addressSearch.trim().toLowerCase();
@@ -2681,7 +2753,9 @@ export default function CharityDeliverySystem() {
               const keys = term
                 ? allKeys.filter((k) => {
                     const a = addresses[k] || {};
-                    return (a.fullAddress || '').toLowerCase().includes(term) || (a.postcode || '').toLowerCase().includes(term);
+                    return (a.fullAddress || '').toLowerCase().includes(term)
+                      || (a.postcode || '').toLowerCase().includes(term)
+                      || (a.name || '').toLowerCase().includes(term);
                   })
                 : allKeys;
               if (term && keys.length === 0) {
@@ -2694,6 +2768,7 @@ export default function CharityDeliverySystem() {
                 <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: held ? '#fff3e0' : 'white' }}>
                   <strong>{a.fullAddress}</strong>
                   {a.postcode && <span style={{ marginLeft: '8px', color: '#777', fontSize: '12px' }}>{a.postcode}</span>}
+                  {a.name && <div style={{ fontSize: '13px', color: '#1565c0', marginTop: '2px' }}>👤 {a.name}</div>}
                   {a.needsLocation && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#e65100', fontWeight: 'bold' }}>⚠ needs location</span>}
                   {a.hold && a.hold.type && a.hold.type !== 'none' && (
                     <span style={{ marginLeft: '8px', fontSize: '11px', color: '#e65100', fontWeight: 'bold' }}>
@@ -2991,6 +3066,53 @@ export default function CharityDeliverySystem() {
                         </div>
                       )}
                       {addresses[key].notes && <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: '#c62828' }}>📝 {addresses[key].notes}</p>}
+                      {!heldNow && (() => {
+                        const hasAlt = !!dateOv.altAddress;
+                        const editing = altAddressEditor && altAddressEditor.key === key;
+                        if (editing) {
+                          return (
+                            <div style={{ marginTop: '8px', padding: '8px', backgroundColor: '#e8f4fd', border: '1px solid #90caf9', borderRadius: '4px' }}>
+                              <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '6px', color: '#1565c0' }}>Deliver elsewhere — this week only</div>
+                              <input type="text" value={altAddressEditor.address} placeholder="Temporary address (e.g. 12 Example Road, Borehamwood)"
+                                onChange={(e) => setAltAddressEditor({ ...altAddressEditor, address: e.target.value })}
+                                style={{ width: '100%', padding: '6px', marginBottom: '6px', boxSizing: 'border-box', fontSize: '13px' }} />
+                              <input type="text" value={altAddressEditor.postcode} placeholder="Postcode (helps routing)"
+                                onChange={(e) => setAltAddressEditor({ ...altAddressEditor, postcode: e.target.value })}
+                                style={{ width: '100%', padding: '6px', marginBottom: '6px', boxSizing: 'border-box', fontSize: '13px' }} />
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                <button onClick={saveAltAddress} disabled={altAddressBusy}
+                                  style={{ fontSize: '12px', padding: '5px 12px', backgroundColor: '#1565c0', color: 'white', border: 'none', cursor: 'pointer' }}>
+                                  {altAddressBusy ? 'Saving…' : 'Save for this week'}
+                                </button>
+                                <button onClick={() => setAltAddressEditor(null)}
+                                  style={{ fontSize: '12px', padding: '5px 12px', backgroundColor: '#9e9e9e', color: 'white', border: 'none', cursor: 'pointer' }}>Cancel</button>
+                              </div>
+                            </div>
+                          );
+                        }
+                        if (hasAlt) {
+                          return (
+                            <div style={{ marginTop: '8px', padding: '8px', backgroundColor: '#e8f4fd', border: '1px solid #90caf9', borderRadius: '4px' }}>
+                              <div style={{ fontSize: '12px', color: '#1565c0' }}>
+                                <strong>📍 This week delivering to:</strong> {dateOv.altAddress}{dateOv.altPostcode ? ' ' + dateOv.altPostcode : ''}
+                                {(typeof dateOv.altLat !== 'number') && <span style={{ color: '#e65100', fontWeight: 'bold' }}> (postcode not located — route position approximate)</span>}
+                              </div>
+                              <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                                <button onClick={() => setAltAddressEditor({ key, address: dateOv.altAddress, postcode: dateOv.altPostcode || '' })}
+                                  style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: '#1565c0', color: 'white', border: 'none', cursor: 'pointer' }}>Edit</button>
+                                <button onClick={() => clearAltAddress(key)}
+                                  style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: '#9e9e9e', color: 'white', border: 'none', cursor: 'pointer' }}>Revert to normal</button>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return (
+                          <button onClick={() => setAltAddressEditor({ key, address: '', postcode: '' })}
+                            style={{ marginTop: '8px', fontSize: '11px', padding: '4px 8px', backgroundColor: 'transparent', color: '#1565c0', border: '1px solid #1565c0', borderRadius: '4px', cursor: 'pointer' }}>
+                            📍 Deliver elsewhere this week
+                          </button>
+                        );
+                      })()}
                       {!heldNow && (
                         <div style={{ marginTop: '8px' }}>
                           <button onClick={() => toggleExcludeAddress(key)} style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: excluded ? '#4CAF50' : '#ff9800', color: 'white', border: 'none', cursor: 'pointer' }}>
@@ -3380,7 +3502,7 @@ export default function CharityDeliverySystem() {
 
                     <div style={{ marginTop: '10px', marginBottom: '10px' }}>
                       {orderStops(keys).map((key) => {
-                        const a = addresses[key] || {};
+                        const a = effectiveAddress(key);
                         const c = calculatedAddresses[key] || { chicken: 0, meat: 0, pies: 0 };
                         return (
                           <div key={key} style={{ padding: '6px 0', borderTop: '1px solid #f0f0f0', fontSize: '13px' }}>
