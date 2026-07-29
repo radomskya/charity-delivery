@@ -1,4 +1,4 @@
-import React, useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { getDatabase, ref, set, onValue, get } from 'firebase/database';
