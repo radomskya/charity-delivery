@@ -1227,7 +1227,17 @@ export default function CharityDeliverySystem() {
     avail.forEach(d => { result[d] = []; });
     const unassigned = [];
 
-    const addrInfo=(key)=>addresses[key]||{};
+    // For allocation we need each stop's LOCATION. If a one-off "deliver elsewhere this week"
+    // address is set, use its coordinates so the stop is clustered/ordered at the temporary
+    // location — while keeping the household's own avoid/preferred rules from the base record.
+    const addrInfo=(key)=>{
+      const base = addresses[key] || {};
+      const ov = (weekOverrides && weekOverrides[selectedDate] && weekOverrides[selectedDate][key]) || {};
+      if (ov.altAddress && typeof ov.altLat === 'number' && typeof ov.altLng === 'number') {
+        return { ...base, lat: ov.altLat, lng: ov.altLng };
+      }
+      return base;
+    };
     const eligibleFor = (key) => {
       const avoid = (addrInfo(key).avoidDrivers) || [];
       return avail.filter(d => !avoid.includes(d));
@@ -1577,12 +1587,15 @@ export default function CharityDeliverySystem() {
   };
 
   const orderStops = (keys) => {
+    // Use this week's EFFECTIVE address (applies any one-off "deliver elsewhere" override) so
+    // ordering, coordinates, and same-street grouping all reflect the temporary location.
+    const ai = (k) => effectiveAddress(k);
     const withCoords = keys.filter((k) => {
-      const a = addresses[k] || {};
+      const a = ai(k);
       return typeof a.lat === 'number' && typeof a.lng === 'number';
     });
     const noCoords = keys.filter((k) => {
-      const a = addresses[k] || {};
+      const a = ai(k);
       return !(typeof a.lat === 'number' && typeof a.lng === 'number');
     });
     const dist = (a, b) => {
@@ -1599,17 +1612,17 @@ export default function CharityDeliverySystem() {
         const cp = { lat: collectionLat, lng: collectionLng };
         let bestDist = Infinity;
         remaining.forEach((k, idx) => {
-          const d = dist(cp, addresses[k]);
+          const d = dist(cp, ai(k));
           if (d < bestDist) { bestDist = d; startIdx = idx; }
         });
       }
       let current = remaining.splice(startIdx, 1)[0];
       ordered.push(current);
       while (remaining.length > 0) {
-        const cur = addresses[current];
+        const cur = ai(current);
         let bestIdx = 0, bestDist = Infinity;
         remaining.forEach((k, idx) => {
-          const d = dist(cur, addresses[k]);
+          const d = dist(cur, ai(k));
           if (d < bestDist) { bestDist = d; bestIdx = idx; }
         });
         current = remaining.splice(bestIdx, 1)[0];
@@ -1621,7 +1634,7 @@ export default function CharityDeliverySystem() {
     // house number ascending, and keep the groups in their nearest-neighbour order. This
     // also pulls together same-street stops that the path left non-adjacent.
     const houseNum = (k) => {
-      const a = addresses[k] || {};
+      const a = ai(k);
       // first standalone number that isn't a flat number — handle "Flat 2, 1 Beech Drive"
       const full = (a.fullAddress || k);
       const stripped = full.replace(/^\s*flat\s*\d+,?\s*/i, '');
@@ -1629,7 +1642,7 @@ export default function CharityDeliverySystem() {
       return m ? parseInt(m[0], 10) : Infinity;
     };
     const groupKeyOf = (k) => {
-      const a = addresses[k] || {};
+      const a = ai(k);
       let full = (a.fullAddress || k);
       // strip leading flat + house number
       full = full.replace(/^\s*(flat\s*\d+,?\s*)?\d+[a-z]?\s*,?\s*/i, '');
