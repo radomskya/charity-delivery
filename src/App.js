@@ -3032,6 +3032,7 @@ export default function CharityDeliverySystem() {
               <div style={{ marginBottom: '20px' }}>
                 {Object.keys(addresses).map((key) => {
                   const dateOv = (weekOverrides && weekOverrides[selectedDate] && weekOverrides[selectedDate][key]) || {};
+                  const _dbgOv = JSON.stringify(dateOv);
                   const calc = calculatedAddresses[key];
                   const excluded = !!dateOv.excluded;
                   // Held addresses are still SHOWN here (greyed out and clearly badged) so you
@@ -3046,6 +3047,7 @@ export default function CharityDeliverySystem() {
                       {heldNow && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#fff', fontWeight: 'bold', backgroundColor: '#607d8b', padding: '2px 8px', borderRadius: '4px' }}>
                         ⏸ ON HOLD{holdInfo.type === 'permanent' ? ' (permanent)' : (holdInfo.to ? ' until ' + formatUKDate(holdInfo.to) : '')}
                       </span>}
+                      <div style={{ fontSize: '10px', color: '#b71c1c', fontFamily: 'monospace', wordBreak: 'break-all' }}>DBG {selectedDate}: {_dbgOv}</div>
                       {(() => {
                         const a = addresses[key];
                         const has = (w) => a[w] && (a[w].chicken || a[w].meat || a[w].pies);
