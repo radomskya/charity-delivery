@@ -66,6 +66,13 @@ export default function CharityDeliverySystem() {
     try { document.title = 'BKFG Deliveries'; } catch (e) {}
   }, []);
   const [addressSearch, setAddressSearch] = useState('');
+  // Standalone future-availability planner: a simple tick/cross grid of drivers × dates.
+  // Completely separate from the poll and delivery data — its own Firebase node, used only
+  // as a personal note of who's indicated they can do which upcoming dates.
+  const [plannerDates, setPlannerDates] = useState([]); // array of 'yyyy-mm-dd'
+  const [plannerGrid, setPlannerGrid] = useState({});   // { driverName: { 'yyyy-mm-dd': 'yes'|'no' } }
+  const [newPlannerDate, setNewPlannerDate] = useState('');
+  const plannerLoadedRef = useRef(false);
   const [availabilityEditMode, setAvailabilityEditMode] = useState(false);
   const [showAddAddress, setShowAddAddress] = useState(false);
   const [showAddDriver, setShowAddDriver] = useState(false);
@@ -184,6 +191,15 @@ export default function CharityDeliverySystem() {
           }, (err) => {
             console.error('adminUsers read failed (check DB rules for /adminUsers):', err);
             setAdminUsersError('Could not read the shared admin list — your database rules likely don\'t allow access to the "adminUsers" path. See the note below.');
+          });
+          // Load the standalone availability planner (its own node, per-user, isolated from
+          // the main delivery data so it can never interfere with holds/overrides).
+          onValue(ref(db, `users/${currentUser.uid}/planner`), (snap) => {
+            if (plannerLoadedRef.current) return;
+            plannerLoadedRef.current = true;
+            const p = snap.val() || {};
+            setPlannerDates(Array.isArray(p.dates) ? p.dates : []);
+            setPlannerGrid(p.grid && typeof p.grid === 'object' ? p.grid : {});
           });
         }
       } else {
@@ -321,6 +337,17 @@ export default function CharityDeliverySystem() {
     const timer = setTimeout(saveData, 1000);
     return () => clearTimeout(timer);
   }, [dataLoaded, addresses, drivers, driverPhones, driverPreferences, anchorDate, anchorWeek, anchorFirstOfMonth, pollMessage, deliveryMessage, butcherEmailTemplate, butcherEmailAddress, collectionAddress, collectionLat, collectionLng, cutoffDay, cutoffHour, cutoffMinute, forceUKTime, pollResponses, allocations, autoAllocated, proposedAllocation, allocationApproved, availableDrivers, weekOverrides, activePollId, broughtForwardTotal, deliveryHistory, selectedDate, deliveryType, user]);
+
+  // Save the availability planner to its OWN node, separate from everything else, so it can
+  // never affect (or be affected by) the delivery data. Only saves after it's first loaded.
+  useEffect(() => {
+    if (!user || !db || !plannerLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      set(ref(db, `users/${user.uid}/planner`), { dates: plannerDates, grid: plannerGrid })
+        .catch((e) => console.error('planner save', e));
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [plannerDates, plannerGrid, user]);
 
   // ============================================================================
   // DATE HELPERS (pure, usable from load before state is set)
@@ -1126,6 +1153,37 @@ export default function CharityDeliverySystem() {
       delete existing.altLat; delete existing.altLng;
       forDate[key] = existing;
       return { ...prev, [selectedDate]: forDate };
+    });
+  };
+
+  // ---- Availability planner helpers ----
+  const addPlannerDate = () => {
+    if (!newPlannerDate) return;
+    if (plannerDates.includes(newPlannerDate)) { setNewPlannerDate(''); return; }
+    setPlannerDates(prev => [...prev, newPlannerDate].sort());
+    setNewPlannerDate('');
+  };
+  const removePlannerDate = (date) => {
+    if (!window.confirm('Remove ' + formatUKDate(date) + ' from the planner?')) return;
+    setPlannerDates(prev => prev.filter(d => d !== date));
+    setPlannerGrid(prev => {
+      const next = {};
+      Object.keys(prev).forEach(drv => {
+        const row = { ...prev[drv] };
+        delete row[date];
+        next[drv] = row;
+      });
+      return next;
+    });
+  };
+  const togglePlannerCell = (driver, date) => {
+    setPlannerGrid(prev => {
+      const row = { ...(prev[driver] || {}) };
+      const cur = row[date];
+      if (!cur) row[date] = 'yes';
+      else if (cur === 'yes') row[date] = 'no';
+      else delete row[date];
+      return { ...prev, [driver]: row };
     });
   };
 
@@ -2560,7 +2618,7 @@ export default function CharityDeliverySystem() {
       </div>
 
       <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '2px solid #ddd', flexWrap: 'wrap' }}>
-        {['addresses', 'drivers', 'poll', 'summary', 'allocate', 'send', 'analytics', 'settings'].map((tab) => (
+        {['addresses', 'drivers', 'poll', 'summary', 'allocate', 'send', 'planner', 'analytics', 'settings'].map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{
               padding: '10px 20px',
@@ -3569,6 +3627,77 @@ export default function CharityDeliverySystem() {
                 );
               })}
             </>
+          )}
+        </div>
+      )}
+
+      {/* PLANNER TAB */}
+      {activeTab === 'planner' && (
+        <div>
+          <h2>🗓️ Availability Planner</h2>
+          <p style={{ fontSize: '13px', color: '#666', marginTop: 0 }}>
+            A simple personal note of which drivers have indicated they can do upcoming dates. This is just a checklist — it's not a poll and isn't linked to allocations or messages. Tap a cell to cycle: blank → ✅ → ❌ → blank.
+          </p>
+
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+            <input type="date" value={newPlannerDate} onChange={(e) => setNewPlannerDate(e.target.value)}
+              style={{ padding: '8px', fontSize: '14px' }} />
+            <button onClick={addPlannerDate}
+              style={{ padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px' }}>
+              ➕ Add date
+            </button>
+          </div>
+
+          {plannerDates.length === 0 ? (
+            <p style={{ color: '#888', fontSize: '14px' }}>No dates added yet. Add a few upcoming dates above to start planning.</p>
+          ) : Object.keys(drivers).length === 0 ? (
+            <p style={{ color: '#888', fontSize: '14px' }}>Add some drivers first (Drivers tab).</p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ borderCollapse: 'collapse', fontSize: '13px', minWidth: '100%' }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: 'left', padding: '8px', borderBottom: '2px solid #333', position: 'sticky', left: 0, backgroundColor: '#fff' }}>Driver</th>
+                    {plannerDates.map((date) => (
+                      <th key={date} style={{ padding: '8px', borderBottom: '2px solid #333', whiteSpace: 'nowrap', textAlign: 'center' }}>
+                        <div>{formatUKDate(date)}</div>
+                        <button onClick={() => removePlannerDate(date)}
+                          style={{ fontSize: '10px', color: '#c62828', background: 'none', border: 'none', cursor: 'pointer', marginTop: '2px' }}>✕ remove</button>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.keys(drivers).map((driver) => (
+                    <tr key={driver}>
+                      <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontWeight: 'bold', position: 'sticky', left: 0, backgroundColor: '#fff', whiteSpace: 'nowrap' }}>{driver}</td>
+                      {plannerDates.map((date) => {
+                        const v = (plannerGrid[driver] || {})[date];
+                        return (
+                          <td key={date} onClick={() => togglePlannerCell(driver, date)}
+                            style={{ padding: '8px', borderBottom: '1px solid #eee', textAlign: 'center', cursor: 'pointer', fontSize: '18px', backgroundColor: v === 'yes' ? '#e8f5e9' : (v === 'no' ? '#ffebee' : 'transparent'), userSelect: 'none' }}>
+                            {v === 'yes' ? '✅' : (v === 'no' ? '❌' : '·')}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                  <tr>
+                    <td style={{ padding: '8px', borderTop: '2px solid #333', fontWeight: 'bold', position: 'sticky', left: 0, backgroundColor: '#fff' }}>✅ Available</td>
+                    {plannerDates.map((date) => {
+                      const yes = Object.keys(drivers).filter((drv) => (plannerGrid[drv] || {})[date] === 'yes').length;
+                      const no = Object.keys(drivers).filter((drv) => (plannerGrid[drv] || {})[date] === 'no').length;
+                      return (
+                        <td key={date} style={{ padding: '8px', borderTop: '2px solid #333', textAlign: 'center', fontWeight: 'bold' }}>
+                          <div style={{ color: '#2e7d32' }}>{yes} ✅</div>
+                          <div style={{ color: '#c62828', fontSize: '11px' }}>{no} ❌</div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
