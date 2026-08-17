@@ -503,17 +503,22 @@ export default function CharityDeliverySystem() {
   // both weeks with items = 2. A triple where only first-of-month qualifies = 1.
   const addressDeliveryCount = (address, deliveryDate, deliveryTypeSelected) => {
     if (!address) return 0;
+    const count = deliveryTypeSelected === 'triple' ? 3 : (deliveryTypeSelected === 'double' ? 2 : 1);
     const weeks = coveredWeeks(deliveryDate, deliveryTypeSelected);
-    let count = 0;
-    weeks.forEach((wk) => {
+    let total = 0;
+    weeks.forEach((wk, i) => {
+      // Skip any covered week where this address is on hold FOR THAT WEEK's date, so a hold
+      // on (say) the 2nd week of a double doesn't get counted.
+      const wkDate = addWeeksToDate(deliveryDate, i);
+      if (isOnHold(address, wkDate)) return;
       const base = wk.weekType === 'A' ? address.weekA : address.weekB;
       let c = (base && (base.chicken || base.meat || base.pies)) ? 1 : 0;
       if (wk.firstOfMonth && address.firstOfMonth && (address.firstOfMonth.chicken || address.firstOfMonth.meat || address.firstOfMonth.pies)) {
-        c = 1; // qualifies via first-of-month items even if the base week is empty
+        c = 1;
       }
-      count += c;
+      total += c;
     });
-    return count;
+    return total;
   };
 
   const combineRules = (address, deliveryDate, deliveryTypeSelected) => {
@@ -525,7 +530,11 @@ export default function CharityDeliverySystem() {
     });
     let result = { chicken: 0, meat: 0, pies: 0 };
     const weeks = coveredWeeks(deliveryDate, deliveryTypeSelected);
-    weeks.forEach((wk) => {
+    weeks.forEach((wk, i) => {
+      // Skip weeks where this address is on hold for that week's date (e.g. the 2nd week of a
+      // double), so held weeks don't contribute quantities.
+      const wkDate = addWeeksToDate(deliveryDate, i);
+      if (isOnHold(address, wkDate)) return;
       const base = wk.weekType === 'A' ? address.weekA : address.weekB;
       result = addQuantities(result, base || { chicken: 0, meat: 0, pies: 0 });
       if (wk.firstOfMonth) {
@@ -1084,10 +1093,14 @@ export default function CharityDeliverySystem() {
     setWeekOverrides(prev => {
       const forDate = { ...(prev[selectedDate] || {}) };
       const existing = { ...(forDate[key] || {}) };
+      // An empty box means "zero this week" (an explicit override), NOT "remove the override"
+      // — otherwise you could never reduce a number to nothing; it would snap back to the
+      // calculated value. Use the Reset button to revert to the normal calculated quantity.
       if (value === '' || value == null) {
-        delete existing[field];
+        existing[field] = 0;
       } else {
-        existing[field] = value;
+        const n = parseInt(value, 10);
+        existing[field] = isNaN(n) ? 0 : n;
       }
       forDate[key] = existing;
       return { ...prev, [selectedDate]: forDate };
