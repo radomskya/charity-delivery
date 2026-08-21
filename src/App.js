@@ -3087,6 +3087,9 @@ export default function CharityDeliverySystem() {
       {activeTab === 'summary' && (
         <div>
           <h2>📊 Summary</h2>
+          <div style={{ fontSize: '11px', color: '#b71c1c', fontFamily: 'monospace', backgroundColor: '#fff3f3', padding: '8px', border: '1px solid #f5c6cb', marginBottom: '10px', wordBreak: 'break-all' }}>
+            DBG selectedDate={JSON.stringify(selectedDate)} · anchorDate={JSON.stringify(anchorDate)} · anchorWeek={JSON.stringify(anchorWeek)} · anchorFoM={JSON.stringify(anchorFirstOfMonth)} · computeWeekType→{JSON.stringify(computeWeekType(selectedDate, anchorDate, anchorWeek))} · detected={JSON.stringify(detectedWeekType)}
+          </div>
           {selectedDate ? (
             <>
               <div style={{ backgroundColor: '#f5f5f5', padding: '15px', marginBottom: '15px', borderRadius: '4px' }}>
