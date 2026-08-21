@@ -441,10 +441,11 @@ export default function CharityDeliverySystem() {
   };
 
   const computeFirstOfMonth = (date) => {
-    // First delivery of a calendar month: the delivery date falls within the
-    // first 7 days of the month. With weekly deliveries exactly one lands here.
-    const d = new Date(date);
-    return d.getDate() <= 7;
+    // First delivery of a calendar month: the delivery date falls within the first 7 days.
+    // Read the day-of-month from the raw string to avoid any timezone day-shift.
+    const parts = String(date).slice(0, 10).split('-');
+    const dayOfMonth = parts.length === 3 ? +parts[2] : new Date(date).getUTCDate();
+    return dayOfMonth <= 7;
   };
 
   const detectWeekType = (date) => computeWeekType(date, anchorDate, anchorWeek);
@@ -484,11 +485,14 @@ export default function CharityDeliverySystem() {
 
   // Add a number of weeks to a yyyy-mm-dd date string, returning a new yyyy-mm-dd string
   const addWeeksToDate = (dateString, weeks) => {
-    const d = new Date(dateString);
-    d.setDate(d.getDate() + weeks * 7);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
+    // Parse as a pure calendar date and do the arithmetic in UTC, so the result never shifts
+    // by a day on devices in a timezone behind UTC (which would flip the computed week type).
+    const parts = String(dateString).slice(0, 10).split('-');
+    const d = new Date(Date.UTC(+parts[0], +parts[1] - 1, +parts[2]));
+    d.setUTCDate(d.getUTCDate() + weeks * 7);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   };
 
@@ -3087,9 +3091,6 @@ export default function CharityDeliverySystem() {
       {activeTab === 'summary' && (
         <div>
           <h2>📊 Summary</h2>
-          <div style={{ fontSize: '11px', color: '#b71c1c', fontFamily: 'monospace', backgroundColor: '#fff3f3', padding: '8px', border: '1px solid #f5c6cb', marginBottom: '10px', wordBreak: 'break-all' }}>
-            DBG selectedDate={JSON.stringify(selectedDate)} · anchorDate={JSON.stringify(anchorDate)} · anchorWeek={JSON.stringify(anchorWeek)} · anchorFoM={JSON.stringify(anchorFirstOfMonth)} · computeWeekType→{JSON.stringify(computeWeekType(selectedDate, anchorDate, anchorWeek))} · detected={JSON.stringify(detectedWeekType)}
-          </div>
           {selectedDate ? (
             <>
               <div style={{ backgroundColor: '#f5f5f5', padding: '15px', marginBottom: '15px', borderRadius: '4px' }}>
