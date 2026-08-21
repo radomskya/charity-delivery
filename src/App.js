@@ -3126,9 +3126,14 @@ export default function CharityDeliverySystem() {
                   const total = calc ? (calc.chicken + calc.meat + calc.pies) : 0;
                   const zeroThisWeek = !excluded && !heldNow && total === 0;
                   const holdInfo = addresses[key].hold || {};
+                  const _wb = addresses[key].weekB || {};
+                  const _wa = addresses[key].weekA || {};
+                  const _fm = addresses[key].firstOfMonth || {};
+                  const _dbg = `A:${_wa.chicken||0}/${_wa.meat||0}/${_wa.pies||0} B:${_wb.chicken||0}/${_wb.meat||0}/${_wb.pies||0} F:${_fm.chicken||0}/${_fm.meat||0}/${_fm.pies||0} | calc:${calc ? (calc.chicken+'/'+calc.meat+'/'+calc.pies) : 'NONE'} | held:${heldNow} excl:${excluded}`;
                   return (
                     <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: heldNow ? '#eceff1' : (excluded ? '#fafafa' : (zeroThisWeek ? '#e8e8e8' : (calc && calc.overridden ? '#fffde7' : 'white'))) }}>
                       <strong style={{ textDecoration: (excluded || heldNow) ? 'line-through' : 'none', color: heldNow ? '#666' : 'inherit' }}>{addresses[key].fullAddress}{addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong>
+                      <div style={{ fontSize: '10px', color: '#b71c1c', fontFamily: 'monospace', wordBreak: 'break-all' }}>DBG {_dbg}</div>
                       {heldNow && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#fff', fontWeight: 'bold', backgroundColor: '#607d8b', padding: '2px 8px', borderRadius: '4px' }}>
                         ⏸ ON HOLD{holdInfo.type === 'permanent' ? ' (permanent)' : (holdInfo.to ? ' until ' + formatUKDate(holdInfo.to) : '')}
                       </span>}
