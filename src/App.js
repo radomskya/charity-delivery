@@ -3129,7 +3129,9 @@ export default function CharityDeliverySystem() {
                   const _wb = addresses[key].weekB || {};
                   const _wa = addresses[key].weekA || {};
                   const _fm = addresses[key].firstOfMonth || {};
-                  const _dbg = `A:${_wa.chicken||0}/${_wa.meat||0}/${_wa.pies||0} B:${_wb.chicken||0}/${_wb.meat||0}/${_wb.pies||0} F:${_fm.chicken||0}/${_fm.meat||0}/${_fm.pies||0} | calc:${calc ? (calc.chicken+'/'+calc.meat+'/'+calc.pies) : 'NONE'} | held:${heldNow} excl:${excluded}`;
+                  const _dbgWk = coveredWeeks(selectedDate, deliveryType);
+                  const _dbgCombined = combineRules(addresses[key], selectedDate, deliveryType);
+                  const _dbg = `A:${_wa.chicken||0}/${_wa.meat||0}/${_wa.pies||0} B:${_wb.chicken||0}/${_wb.meat||0}/${_wb.pies||0} F:${_fm.chicken||0}/${_fm.meat||0}/${_fm.pies||0} | combineWk:${JSON.stringify(_dbgWk)} combined:${_dbgCombined.chicken}/${_dbgCombined.meat}/${_dbgCombined.pies} | calc:${calc ? (calc.chicken+'/'+calc.meat+'/'+calc.pies) : 'NONE'} | held:${heldNow} excl:${excluded} anchor:${anchorDate}/${anchorWeek}`;
                   return (
                     <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: heldNow ? '#eceff1' : (excluded ? '#fafafa' : (zeroThisWeek ? '#e8e8e8' : (calc && calc.overridden ? '#fffde7' : 'white'))) }}>
                       <strong style={{ textDecoration: (excluded || heldNow) ? 'line-through' : 'none', color: heldNow ? '#666' : 'inherit' }}>{addresses[key].fullAddress}{addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong>
