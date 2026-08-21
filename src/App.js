@@ -484,6 +484,18 @@ export default function CharityDeliverySystem() {
   // ============================================================================
 
   // Add a number of weeks to a yyyy-mm-dd date string, returning a new yyyy-mm-dd string
+  // "Today" as a UK (Europe/London) calendar date (yyyy-mm-dd), so holds and date defaults
+  // reflect the UK day even when the device is in another timezone (e.g. LA). This is a
+  // UK-based charity, so "today"/"this week" should always mean UK.
+  const ukToday = () => {
+    try {
+      // en-CA gives yyyy-mm-dd; timeZone pins it to London regardless of device.
+      return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+    } catch (e) {
+      return new Date().toISOString().split('T')[0];
+    }
+  };
+
   const addWeeksToDate = (dateString, weeks) => {
     // Parse as a pure calendar date and do the arithmetic in UTC, so the result never shifts
     // by a day on devices in a timezone behind UTC (which would flip the computed week type).
@@ -621,7 +633,7 @@ export default function CharityDeliverySystem() {
 
   const generateHTMLTable = () => {
     const driverName = "DRIVER_NAME";
-    const dateStr = selectedDate || new Date().toISOString().split('T')[0];
+    const dateStr = selectedDate || ukToday();
     const addresses_array = Object.entries(calculatedAddresses);
     const headerText = deliveryMessage
       .replace(/\{DRIVER\}/g, driverName)
@@ -2663,7 +2675,7 @@ export default function CharityDeliverySystem() {
         <div>
           <h2>📋 Addresses</h2>
           {(() => {
-            const today = new Date().toISOString().split('T')[0];
+            const today = ukToday();
             const activeKeys = Object.keys(addresses).filter((k) => !isOnHold(addresses[k], today));
             const sum = (which) => {
               let c = 0, m = 0, p = 0;
