@@ -419,9 +419,18 @@ export default function CharityDeliverySystem() {
 
   const computeWeekType = (date, aDate, aWeek) => {
     if (!aDate) return 'A';
-    const anchor = new Date(aDate);
-    const selected = new Date(date);
-    const daysDiff = Math.floor((selected - anchor) / (1000 * 60 * 60 * 24));
+    // Normalise both to a pure date (strip any time/timezone component) before diffing, so a
+    // stored anchor like "2026-06-11T12:00:00Z" can't shift the day count and flip the week.
+    const toDateOnly = (v) => {
+      const s = String(v).slice(0, 10); // yyyy-mm-dd
+      const parts = s.split('-');
+      if (parts.length === 3) return new Date(Date.UTC(+parts[0], +parts[1] - 1, +parts[2]));
+      const d = new Date(v);
+      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    };
+    const anchor = toDateOnly(aDate);
+    const selected = toDateOnly(date);
+    const daysDiff = Math.round((selected - anchor) / (1000 * 60 * 60 * 24));
     // Alternate every 7 days from the anchor, straight through month boundaries.
     const weeksSinceAnchor = Math.floor(daysDiff / 7);
     if (aWeek === 'A') {
@@ -3126,16 +3135,9 @@ export default function CharityDeliverySystem() {
                   const total = calc ? (calc.chicken + calc.meat + calc.pies) : 0;
                   const zeroThisWeek = !excluded && !heldNow && total === 0;
                   const holdInfo = addresses[key].hold || {};
-                  const _wb = addresses[key].weekB || {};
-                  const _wa = addresses[key].weekA || {};
-                  const _fm = addresses[key].firstOfMonth || {};
-                  const _dbgWk = coveredWeeks(selectedDate, deliveryType);
-                  const _dbgCombined = combineRules(addresses[key], selectedDate, deliveryType);
-                  const _dbg = `A:${_wa.chicken||0}/${_wa.meat||0}/${_wa.pies||0} B:${_wb.chicken||0}/${_wb.meat||0}/${_wb.pies||0} F:${_fm.chicken||0}/${_fm.meat||0}/${_fm.pies||0} | combineWk:${JSON.stringify(_dbgWk)} combined:${_dbgCombined.chicken}/${_dbgCombined.meat}/${_dbgCombined.pies} | calc:${calc ? (calc.chicken+'/'+calc.meat+'/'+calc.pies) : 'NONE'} | held:${heldNow} excl:${excluded} anchor:${anchorDate}/${anchorWeek}`;
                   return (
                     <div key={key} style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '10px', backgroundColor: heldNow ? '#eceff1' : (excluded ? '#fafafa' : (zeroThisWeek ? '#e8e8e8' : (calc && calc.overridden ? '#fffde7' : 'white'))) }}>
                       <strong style={{ textDecoration: (excluded || heldNow) ? 'line-through' : 'none', color: heldNow ? '#666' : 'inherit' }}>{addresses[key].fullAddress}{addresses[key].postcode ? ' ' + addresses[key].postcode : ''}</strong>
-                      <div style={{ fontSize: '10px', color: '#b71c1c', fontFamily: 'monospace', wordBreak: 'break-all' }}>DBG {_dbg}</div>
                       {heldNow && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#fff', fontWeight: 'bold', backgroundColor: '#607d8b', padding: '2px 8px', borderRadius: '4px' }}>
                         ⏸ ON HOLD{holdInfo.type === 'permanent' ? ' (permanent)' : (holdInfo.to ? ' until ' + formatUKDate(holdInfo.to) : '')}
                       </span>}
